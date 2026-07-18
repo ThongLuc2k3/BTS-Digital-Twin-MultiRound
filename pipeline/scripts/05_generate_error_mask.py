@@ -206,6 +206,34 @@ def main():
     )
     out_dir = Path(args.out_dir) if args.out_dir else pipeline_root / "work" / scene.name / "error_masks"
 
+    # Dọn sạch mask CŨ (nếu có) TRƯỚC khi sinh mask mới — đã tự phát hiện + verify bằng
+    # test thật ở verification pass #5 (KHÔNG suy đoán): script này KHÔNG dọn out_dir
+    # trước đây, chỉ ghi ĐÈ đúng những ảnh nằm trong lần chạy NÀY (tên file trùng stem).
+    # Nếu lần chạy trước có PHẠM VI khác lần này (vd `--n_images` debug lấy mẫu 1 phần,
+    # hoặc lần trước CRASH giữa chừng trước khi xử lý hết ảnh), các file .png CŨ (sinh
+    # với `--max_weight`/`--blur_radius`/checkpoint iteration KHÁC) sẽ CÒN SÓT LẠI
+    # nguyên vẹn trong khi `manifest.json` (nếu ghi xong) mô tả cấu hình lần chạy NÀY —
+    # nguy hiểm vì `apply_error_refine_patch.py::_error_mask()` đọc mask theo ĐÚNG TÊN
+    # FILE (`stem + ".png"`) cho MỌI ảnh train, KHÔNG đối chiếu với manifest.json để biết
+    # ảnh nào thuộc lần sinh mask nào — 1 mask CŨ tồn tại vẫn được dùng ÂM THẦM, trộn lẫn
+    # trọng số của 2 cấu hình khác nhau vào cùng 1 lượt refine mà không có cảnh báo gì.
+    # Dọn sạch ở đây đảm bảo out_dir LUÔN phản ánh ĐÚNG VÀ CHỈ đúng 1 lần chạy gần nhất:
+    # nếu chạy sau CRASH giữa chừng (chưa kịp ghi manifest.json ở cuối), out_dir sẽ chỉ
+    # có 1 phần mask MỚI + KHÔNG có manifest.json — 06_train_refine.sh tự phát hiện thiếu
+    # manifest.json và [BỎ QUA] rõ ràng, thay vì âm thầm dùng nhầm manifest CŨ.
+    if out_dir.exists():
+        _stale_png = list(out_dir.glob("*.png"))
+        _stale_manifest = out_dir / "manifest.json"
+        _had_manifest = _stale_manifest.exists()
+        for _p in _stale_png:
+            _p.unlink()
+        if _had_manifest:
+            _stale_manifest.unlink()
+        if _stale_png or _had_manifest:
+            print(f"  [dọn dẹp] Đã xoá {len(_stale_png)} mask .png cũ"
+                  f"{' + manifest.json cũ' if _had_manifest else ''} tại {out_dir} "
+                  f"trước khi sinh mask mới (tránh mask cũ/mới lẫn cấu hình khác nhau).")
+
     if not images_dir.exists():
         raise SystemExit(
             f"Không thấy {images_dir} (ảnh đã undistort) — nếu bước train trước đó đã tự dọn thư mục "

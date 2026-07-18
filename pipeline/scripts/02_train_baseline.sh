@@ -142,6 +142,42 @@ for SCENE in "$@"; do
     continue
   fi
 
+  # Chặn re-run âm thầm đè lên checkpoint SỐ CŨ khác cấu hình (đã tự phát hiện + verify
+  # bằng test thật ở verification pass #5, KHÔNG suy đoán): script này không
+  # --start_checkpoint nên MỖI lần chạy train lại từ đầu (iteration 0); nếu MODEL_DIR đã
+  # có sẵn point_cloud/ từ 1 lần chạy TRƯỚC (vd đã chạy MODE=holdout rồi thử lại A/B với
+  # ANTIALIASING khác, hoặc lần trước bị crash giữa chừng) và lần này ITERATIONS NHỎ HƠN
+  # lần trước, các thư mục iteration_<N> SỐ LỚN của lần trước sẽ CÒN SÓT LẠI nguyên vẹn
+  # (train.py chỉ ghi/ghi đè đúng các SAVE_ITERATIONS của lần chạy NÀY) trong khi
+  # pipeline_train_flags.json bị ghi đè theo cấu hình MỚI ở cuối script — kết quả:
+  # 03_render_test_poses.py::find_latest_iteration() mặc định chọn iteration SỐ LỚN NHẤT
+  # (checkpoint SÓT LẠI, cấu hình CŨ) nhưng đọc antialiasing từ pipeline_train_flags.json
+  # (đã là cấu hình MỚI) -> lệch antialiasing giữa checkpoint thật và flags đọc được, làm
+  # méo hoàn toàn PSNR/SSIM/LPIPS mà KHÔNG có lỗi báo (đúng loại bug đã cảnh báo ở
+  # docs/PORTED_KNOWLEDGE.md mục 2, nhưng do nguyên nhân MỚI: checkpoint sót lại từ
+  # re-run, không phải thiếu file). Đã verify bằng mock thật: train ANTIALIASING=1
+  # ITERATIONS=15000 (tạo iteration_7000+15000, antialiasing=true) rồi re-run
+  # ANTIALIASING=0 ITERATIONS=7000 (chỉ ghi đè iteration_7000) — xác nhận iteration_15000
+  # còn nguyên NỘI DUNG antialiasing=true trong khi pipeline_train_flags.json đã đổi
+  # thành antialiasing:false. KHÔNG tự động xoá/ghi đè — báo lỗi rõ, để user tự quyết.
+  if [[ -d "$MODEL_DIR/point_cloud" ]] && \
+     [[ -n "$(find "$MODEL_DIR/point_cloud" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    echo "[BỎ QUA] $SCENE: $MODEL_DIR/point_cloud đã có checkpoint từ (các) lần chạy TRƯỚC." >&2
+    echo "         Script này luôn train lại từ đầu (không --start_checkpoint) — nếu ITERATIONS lần" >&2
+    echo "         này khác lần trước (hoặc ANTIALIASING/SH_DEGREE đổi), các checkpoint iteration_<N>" >&2
+    echo "         SỐ LỚN của lần trước có thể CÒN SÓT LẠI với cấu hình CŨ trong khi" >&2
+    echo "         pipeline_train_flags.json bị ghi đè theo cấu hình MỚI, khiến bước render sau" >&2
+    echo "         này âm thầm chọn NHẦM checkpoint sai cấu hình (xem chi tiết trong comment code)." >&2
+    echo "         Xoá $MODEL_DIR/point_cloud (hoặc cả $MODEL_DIR) rồi chạy lại nếu CỐ Ý muốn train" >&2
+    echo "         lại từ đầu, hoặc set CLEAN_MODEL_DIR=1 để script tự xoá trước khi train $SCENE." >&2
+    if [[ "${CLEAN_MODEL_DIR:-0}" == "1" ]]; then
+      echo "  [$SCENE] CLEAN_MODEL_DIR=1 — tự xoá $MODEL_DIR/point_cloud trước khi train lại từ đầu."
+      rm -rf "$MODEL_DIR/point_cloud"
+    else
+      continue
+    fi
+  fi
+
   # Cảnh báo sớm nếu đĩa sắp hết TRƯỚC KHI đâm đầu vào train (có thể mất vài
   # tiếng) — tốt hơn là để nó chết giữa chừng lúc lưu checkpoint. Ngưỡng 5GB là
   # ước lượng an toàn (1 checkpoint point_cloud.ply có thể nặng cỡ vài trăm MB

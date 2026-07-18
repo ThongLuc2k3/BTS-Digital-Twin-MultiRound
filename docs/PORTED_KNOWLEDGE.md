@@ -234,6 +234,106 @@ sở hữu 1 phần):
   `.sh`, đọc lại schema `pipeline_train_flags.json`, đối chiếu CLI contract
   `03_render_test_poses.py` với 3 script còn lại) — không tìm thêm sai lệch nào.
 
+## 6e. Bug MỚI tìm ra ở verification pass #5 (`docs/MILESTONE_08_verification_pass5.md`)
+
+Pass này đổi hướng: không re-audit các fix cũ nữa (4 pass trước đã làm kỹ), mà chủ động
+**thử phá** bằng input/kịch bản chưa ai test (re-run, input rỗng/hỏng, dependency latest
+thật) — tìm ra **3 bug thật MỚI**, cả 3 đều verify bằng THỰC THI THẬT (không suy đoán):
+
+1. **`02_train_baseline.sh` KHÔNG chặn re-run đè lên checkpoint SỐ CŨ khác cấu hình** —
+   script không `--start_checkpoint` nên MỖI lần chạy train lại từ đầu; nếu re-run cùng
+   scene với `ITERATIONS` NHỎ HƠN lần trước (hoặc `ANTIALIASING` khác), các checkpoint
+   `iteration_<N>` SỐ LỚN của lần trước CÒN SÓT LẠI nguyên vẹn (train.py chỉ ghi/ghi đè
+   đúng `SAVE_ITERATIONS` của lần NÀY) trong khi `pipeline_train_flags.json` bị ghi đè
+   theo cấu hình MỚI ở cuối script — `03_render_test_poses.py::find_latest_iteration()`
+   mặc định chọn iteration SỐ LỚN NHẤT (checkpoint SÓT LẠI, cấu hình CŨ) nhưng đọc
+   antialiasing từ flags MỚI, làm méo hoàn toàn PSNR/SSIM/LPIPS mà KHÔNG báo lỗi — đúng
+   loại bug đã cảnh báo ở mục 2 nhưng do nguyên nhân MỚI (checkpoint sót lại từ re-run,
+   không phải thiếu file). Trigger THẬT (không phải giả định): chính notebook
+   `kaggle_round1_baseline.ipynb` KHUYẾN NGHỊ tường minh ở Bước 6 quy trình "chạy vài
+   version MODE=holdout (15000 iter) rồi 1 version MODE=final (30000 iter)" — nếu làm
+   NGƯỢC LẠI (final trước, holdout sau, trong cùng phiên tương tác không restart kernel
+   — vd thử lại A/B `ANTIALIASING` như chính usage-comment của script gợi ý), checkpoint
+   `iteration_30000` (train 100% ảnh, dùng để nộp bài) CÒN SÓT LẠI và bị
+   `03_render_test_poses.py` dùng NHẦM để tính Score holdout — vừa sai antialiasing vừa
+   RÒ RỈ DỮ LIỆU (model đã thấy ảnh holdout lúc train `final`), làm Score đo được KHÔNG
+   CÒN Ý NGHĨA mà không có cảnh báo nào. Verify bằng mock thật: train
+   `ANTIALIASING=1 ITERATIONS=15000` (tạo `iteration_7000`+`15000`, antialiasing=true),
+   re-run `ANTIALIASING=0 ITERATIONS=7000` (chỉ ghi đè `iteration_7000`) — xác nhận
+   `iteration_15000` còn nguyên nội dung `antialiasing=true` trong khi
+   `pipeline_train_flags.json` đã đổi thành `antialiasing:false`. **Đã sửa**: thêm guard
+   ngay đầu vòng lặp scene trong `02_train_baseline.sh` — nếu
+   `$MODEL_DIR/point_cloud` đã có checkpoint từ trước, in `[BỎ QUA]` (không phá batch
+   nhiều scene, giống cách xử lý thiếu `sparse/0`) + hướng dẫn rõ xoá thủ công hoặc set
+   `CLEAN_MODEL_DIR=1` để tự xoá trước khi train lại — verify lại bằng mock: default
+   block đúng (không đụng checkpoint cũ), `CLEAN_MODEL_DIR=1` xoá sạch + train lại đúng,
+   batch nhiều scene (1 scene bị chặn) không ảnh hưởng scene khác vẫn train bình thường.
+2. **`05_generate_error_mask.py` KHÔNG dọn `error_masks/` cũ trước khi ghi mask mới** —
+   chỉ ghi ĐÈ đúng ảnh nằm trong lần chạy NÀY (theo tên file trùng stem); nếu lần trước
+   có PHẠM VI khác (vd `--n_images` debug lấy mẫu 1 phần, hoặc lần trước CRASH giữa
+   chừng trước khi xử lý hết ảnh — `manifest.json` chỉ ghi ở CUỐI hàm nên crash giữa
+   chừng để lại mask MỚI trộn với mask CŨ mà KHÔNG cập nhật manifest), các mask `.png`
+   CŨ (sinh với `--max_weight`/`--blur_radius`/iteration KHÁC) CÒN SÓT LẠI. Nguy hiểm vì
+   đã đọc trực tiếp `apply_error_refine_patch.py::_error_mask()` xác nhận: hàm đó tra
+   mask theo ĐÚNG TÊN FILE (`stem + ".png"`) cho MỌI ảnh train, KHÔNG đối chiếu với
+   `manifest.json` để biết ảnh nào thuộc lần sinh mask nào — 1 mask CŨ tồn tại vẫn được
+   dùng ÂM THẦM, trộn lẫn trọng số của 2 cấu hình khác nhau vào cùng 1 lượt refine mà
+   không có cảnh báo gì (khác việc chỉ "gây nhiễu khi xem tay" như suy đoán ban đầu —
+   ảnh hưởng THẬT tới train). Verify bằng test logic thật (dựng thư mục giả 3 mask +
+   manifest CŨ, chạy đúng đoạn code dọn dẹp, xác nhận mask KHÔNG nằm trong lần chạy mới
+   bị xoá sạch, mask CÓ trong lần chạy mới giữ nội dung mới). **Đã sửa**: thêm bước dọn
+   `*.png` + `manifest.json` cũ trong `out_dir` ngay đầu `main()` (trước khi xử lý ảnh
+   nào) — đảm bảo `error_masks/` LUÔN phản ánh ĐÚNG VÀ CHỈ đúng 1 lần chạy gần nhất; nếu
+   crash giữa chừng, thư mục chỉ có 1 phần mask MỚI + KHÔNG CÓ `manifest.json` (thay vì
+   mask MỚI + manifest.json CŨ) — `06_train_refine.sh` tự phát hiện thiếu manifest và
+   `[BỎ QUA]` rõ ràng thay vì âm thầm dùng nhầm manifest cũ.
+3. **`gdown --fuzzy` KHÔNG CÒN TỒN TẠI ở gdown ≥ 6.0.0 (bản mới nhất PyPI hiện tại,
+   6.1.0)** — đây là bug NGHIÊM TRỌNG NHẤT tìm được ở pass này: cả 4 notebook luôn
+   `!pip install -q ... gdown` KHÔNG PIN version, nên MỖI LẦN chạy fresh Kaggle session
+   sẽ tự động lấy bản mới nhất. Verify bằng THỰC THI THẬT (không suy đoán, đúng yêu cầu
+   nhiệm vụ): cài `gdown` mới nhất (6.1.0) trong venv sạch, chạy đúng lệnh notebook dùng
+   (`gdown --fuzzy "<url>" -O ...` và `gdown --fuzzy --folder "<url>" -O ...`) — CẢ 2
+   đều lỗi CLI NGAY LẬP TỨC: `gdown: error: unrecognized arguments: --fuzzy` (exit 2,
+   trước khi kịp tải bất kỳ thứ gì). Đối chiếu ngược `gdown==5.2.2` xác nhận `--fuzzy`
+   THẬT SỰ tồn tại ở bản cũ (`(file only) extract Google Drive's file ID`) — bị
+   `gdown==6.0.0` xoá hẳn (không phải lỗi gõ nhầm ở đây, không phải version cache lạ).
+   Tin TỐT xác nhận cùng lúc bằng thực thi thật: `gdown.parse_url.parse_url()` (hàm lõi
+   dùng để suy ra file ID từ URL) ở bản 6.1.0 vẫn tự nhận diện ĐÚNG file ID từ URL dạng
+   share-link đầy đủ (`.../file/d/<id>/view?usp=...`) MÀ KHÔNG CẦN cờ `--fuzzy` nào —
+   hành vi "fuzzy" đã trở thành MẶC ĐỊNH LUÔN BẬT ở bản mới, cờ bị xoá vì hết cần thiết
+   (không phải vì tính năng bị xoá). Tức là: pipeline vẫn tải được dữ liệu bình thường
+   nếu bỏ hẳn cờ `--fuzzy` — không cần pin version cũ (rủi ro version cũ hết được
+   support/security patch), chỉ cần bỏ cờ đã lỗi thời. Đã verify lại bằng thực thi thật
+   sau khi sửa: `gdown --json "<GDRIVE_URL thật>"` (không `--fuzzy`) trả về đúng
+   `"path": "VAI_NVS_DATA_ROUND2.zip"` — xác nhận vẫn resolve đúng file thật, không phải
+   chỉ hết lỗi cú pháp suông. **Đã sửa**: bỏ `--fuzzy` khỏi TẤT CẢ lệnh `gdown` (dataset +
+   checkpoint) ở cả 4 notebook (`kaggle_round1_baseline.ipynb`,
+   `kaggle_round2_refine.ipynb`, `kaggle_round3_refine.ipynb`, `kaggle_submission.ipynb`)
+   + 1 dòng comment/markdown còn nhắc `--fuzzy` trong `kaggle_submission.ipynb`.
+   Bài học: cờ CLI/API của 1 tool bên thứ 3 KHÔNG cố định qua thời gian dù pipeline
+   không đổi gì — `!pip install -q ... <tool>` KHÔNG pin version nghĩa là hành vi có thể
+   đổi ÂM THẦM giữa lần verify (viết code) và lần chạy thật (Kaggle session sau này),
+   không phải rủi ro lý thuyết suông — đã xảy ra thật với đúng gdown, đúng flag dự án
+   đang dùng, ngay tại thời điểm viết milestone log này. Nên coi bất kỳ dependency nào
+   cài KHÔNG PIN version trong notebook là rủi ro cần re-verify định kỳ (không chỉ 1 lần
+   lúc viết), đặc biệt trước mỗi lần chạy Kaggle thật quan trọng gần deadline.
+
+Ngoài 3 bug trên, đã fact-check 3 tuyên bố tài liệu load-bearing khác đối chiếu trực
+tiếp code hiện tại (không chỉ tin milestone log cũ):
+- Công thức `Score = 0.4*(1-LPIPS) + 0.3*SSIM + 0.3*PSNR_norm` +
+  `PSNR_max` mặc định `50.0` — đối chiếu `04_eval_metrics.py::compute_score()` +
+  `--psnr_max` default: khớp CHÍNH XÁC. Đúng.
+- Commit pin `54c035f7834b564019656c3e3fcc3646292f727d` — grep byte-for-byte TOÀN repo
+  (`.sh`, `.py`, `.ipynb`, `docs/`): khớp nhau ở MỌI nơi xuất hiện. Đúng, không có
+  leftover/lệch.
+- Cảnh báo "bug scale COLMAP" (`points2D.xy` lệch resolution, mục 1) — grep TOÀN
+  `pipeline/*.py` cho `points2D`/`.xy`/`project_point`: KHÔNG có kết quả nào — hiện
+  KHÔNG có script nào trong repo NÀY thực sự đọc `points2D.xy` trực tiếp (khác repo tiền
+  nhiệm, nơi antenna-focus dùng nó để dựng mask khung 3D — kỹ thuật này đã bị loại khỏi
+  Vòng 1 của repo này, xem mục 2). Không phải tuyên bố SAI (vẫn đúng như kiến thức
+  phòng ngừa), nhưng hiện là kiến thức "ngủ đông" — không có code nào đang thực sự cần
+  áp dụng nó. Ghi rõ ở đây để pass sau không tưởng nhầm đây là bug đang active cần fix.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify
