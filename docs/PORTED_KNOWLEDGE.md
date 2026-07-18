@@ -194,6 +194,46 @@ sở hữu 1 phần):
   `gaussian-splatting` của cả 4 notebook xác nhận thứ tự `git checkout <pin>` rồi mới
   `git submodule update --init --recursive` giống hệt nhau ở cả 4 file.
 
+## 6d. Bug MỚI tìm ra ở verification pass #3 (`docs/MILESTONE_06_verification_pass3.md`)
+
+- **`kaggle_submission.ipynb` có bản logic symlink dataset CŨ/kém an toàn hơn 3 notebook
+  kia** — bug class "sibling file không được backport fix" (đúng loại pass #2 đã tìm,
+  nhưng ở vị trí khác hoàn toàn: notebook thay vì shell script). 3 notebook
+  `kaggle_round1_baseline.ipynb`/`kaggle_round2_refine.ipynb`/`kaggle_round3_refine.ipynb`
+  xử lý ĐÚNG cả 2 trường hợp target đã tồn tại (symlink cũ → `unlink()`; thư mục THẬT
+  còn sót lại → `shutil.rmtree()`) rồi LUÔN tạo symlink mới. `kaggle_submission.ipynb`
+  (viết độc lập bởi agent milestone 03, không đối chiếu byte-for-byte với 3 notebook
+  kia) có bản: `target.unlink() if target.is_symlink() else None` rồi
+  `if not target.exists(): os.symlink(...)` — nếu `target` là THƯ MỤC THẬT (không phải
+  symlink) còn sót từ 1 lần chạy trước, biểu thức ternary không làm gì cả (`None`), thư
+  mục cũ không bị xoá, `target.exists()` vẫn `True` sau đó nên `os.symlink()` KHÔNG BAO
+  GIỜ được gọi — dataset MỚI vừa tải bị ÂM THẦM bỏ qua, notebook tiếp tục chạy với dữ
+  liệu CŨ mà không có lỗi/cảnh báo nào. Trigger hẹp (chỉ lộ khi user chạy lại Bước 4
+  trong CÙNG phiên Kaggle, vd retry sau lỗi mạng hoặc đổi `GDRIVE_URL`) nhưng hậu quả
+  nặng (đóng gói `submission.zip` sai dataset ở đúng notebook nộp bài cuối cùng, không
+  báo lỗi). Verify bằng test thật (dựng thư mục target giả có file đánh dấu STALE,
+  chạy đúng code cũ → xác nhận symlink không được tạo, dữ liệu cũ còn nguyên; chạy code
+  đã sửa → xác nhận symlink trỏ đúng dataset mới). **Đã sửa**: đổi
+  `kaggle_submission.ipynb` sang đúng logic robust của 3 notebook kia.
+- **Cell kiểm tra GPU ở cả 4 notebook chỉ `print()` cảnh báo, không dừng "Run All"**:
+  vi phạm triết lý "fail loudly" đã áp dụng nhất quán ở mọi nơi khác trong dự án — nếu
+  người dùng quên bật Accelerator GPU, cell này chỉ in 1 dòng cảnh báo dễ chìm giữa log
+  `!pip install` ngay sau, notebook tiếp tục "chạy" (tải dataset, build extension —
+  build KHÔNG cần GPU device nên có thể "thành công" giả) rồi mới crash muộn ở lần gọi
+  `.cuda()` đầu tiên, sau khi đã tốn nhiều phút quota Kaggle — rủi ro lãng phí thời gian
+  nghiêm trọng dưới deadline gấp (`docs/00_MASTER_PLAN.md` mục 1). **Đã sửa**: cả 4
+  notebook — thêm `raise SystemExit(...)` ngay nếu `not torch.cuda.is_available()`.
+- Bài học (khác góc pass #2, cùng tinh thần): khi audit "backport-style bug", đừng chỉ
+  giới hạn ở các file `.sh`/`.py` — notebook Jupyter cũng có cell boilerplate lặp lại
+  giữa nhiều file, và dễ bị bỏ sót hơn vì không có công cụ diff tự nhiên như `git diff`
+  trên source thuần (phải tự dump `cell.source` ra rồi so bằng script, không đọc bằng
+  mắt). Cũng: một cell có vẻ "chỉ là cảnh báo UX" (GPU check) vẫn có thể là 1 dạng bug
+  thật theo đúng triết lý "fail loudly" mà dự án đã tự đặt ra ở những chỗ khác — audit
+  nhất quán triết lý, không chỉ audit tính đúng-sai toán học/logic.
+- Đã re-verify các fix của pass #1/#2 (đọc lại `_latest_iteration_dir()` ở cả 2 file
+  `.sh`, đọc lại schema `pipeline_train_flags.json`, đối chiếu CLI contract
+  `03_render_test_poses.py` với 3 script còn lại) — không tìm thêm sai lệch nào.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify

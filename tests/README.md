@@ -31,18 +31,31 @@ pip install nbformat pillow numpy
 | `test_syntax_all.py` | Toàn repo: `py_compile` mọi `.py`, `nbformat.validate()` mọi `.ipynb` | Không | Tự bỏ qua nếu 1 agent khác chưa đẩy hết file — báo "LƯU Ý" chứ không FAIL, để không chặn lẫn nhau khi 3 agent cùng làm song song |
 | `test_07_package_submission.py` | `pipeline/scripts/07_package_submission.py` + `pipeline/kaggle_submission.ipynb` (2 file do agent packaging/testing sở hữu) | Không | Mock toàn bộ dataset (`test_poses.csv` giả) + renders (PNG giả) qua biến môi trường `BTS_DATASET_ROOT` + `--renders_root`, chạy script thật qua `subprocess`. Có test regression riêng cho bug thật đã tìm+sửa ở repo tiền nhiệm (đổi tên `.jpg` mà không mã hoá lại nội dung — xem `docs/PORTED_KNOWLEDGE.md` mục 5) |
 
-## Test còn THIẾU (cần làm sau khi merge đủ 3 nhánh agent)
+## Test đã bổ sung sau khi merge đủ các nhánh agent (không còn nằm trong `tests/`)
 
-Xem chi tiết đầy đủ + lý do ở `docs/MILESTONE_03_submission_and_testing.md` mục
-"Bước tiếp theo". Tóm tắt nhanh:
+Các mục dưới đây từng nằm trong danh sách "còn THIẾU" lúc `docs/MILESTONE_03_submission_and_testing.md`
+được viết (khi 3 nhánh agent còn làm song song) — đã được các milestone/verification pass
+SAU ĐÓ tự thực hiện bằng mock/test có mục tiêu, NHƯNG không phải dưới dạng file
+`tests/test_*.py` cố định (không chạy lại tự động qua 2 lệnh ở mục "Chạy toàn bộ" phía
+trên) — chỉ có kết quả ghi lại trong milestone log tương ứng:
 
-- Test patch `train.py` thật cho `apply_error_refine_patch.py` (thuộc agent refine,
-  không phải phạm vi agent này — kiểm tra xem agent đó đã tự test chưa).
+- Test patch `train.py` thật cho `apply_error_refine_patch.py` — áp thật lên bản clone
+  `graphdeco-inria/gaussian-splatting` tại đúng commit pin, `py_compile` sạch sau vá
+  (`docs/MILESTONE_02_refine_pipeline.md`, re-verify độc lập ở
+  `docs/MILESTONE_04_verification_pass1.md` Phần C).
 - Test mock end-to-end cho `02_train_baseline.sh`/`06_train_refine.sh` bằng `train.py`
-  giả (mock) — thuộc agent Round-1/refine.
-- Test tích hợp CHẠY THẬT `03_render_test_poses.py` (cần GPU, không test được cục
-  bộ) — chỉ verify được bằng cách đọc code (đã làm, xem milestone doc) cho tới khi có
-  dịp chạy thật trên Kaggle.
+  giả (mock, hỗ trợ `CRASH_AT`/`MOCK_CRASH`) — `docs/MILESTONE_01_round1_baseline.md`,
+  `docs/MILESTONE_02_refine_pipeline.md`; test THẬT với 2 scene trong 1 lệnh (multi-scene
+  invocation) ở `docs/MILESTONE_06_verification_pass3.md`.
+- Mô phỏng chuỗi Vòng1→Vòng2→Vòng3→render→package bằng 1 fake `GS_REPO` dùng code thật
+  không-CUDA từ đúng commit pin (`docs/MILESTONE_04_verification_pass1.md` Phần C) —
+  KHÔNG thay thế được 1 lần chạy GPU Kaggle thật (xem mục dưới).
+
+## Test còn THIẾU (chỉ chạy được trên Kaggle thật, có GPU)
+
+- Test tích hợp CHẠY THẬT `03_render_test_poses.py`/`train.py` trên GPU CUDA thật (chất
+  lượng render/Score thật) — chỉ verify được bằng cách đọc code + mock rasterizer cục bộ
+  cho tới khi có dịp chạy thật trên Kaggle.
 - Test full "Run All" cả 4 notebook (`kaggle_round1_baseline.ipynb`,
   `kaggle_round2_refine.ipynb`, `kaggle_round3_refine.ipynb`,
   `kaggle_submission.ipynb`) nối tiếp nhau bằng checkpoint thật — chỉ làm được trên
