@@ -1,0 +1,32 @@
+# Dataset thi — nặng, tải riêng từ Google Drive (xem pipeline/kaggle_*.ipynb).
+Dataset/
+
+# Output trung gian pipeline (COLMAP, model 3DGS, ảnh render, error mask...) — sinh lại được.
+pipeline/work/
+
+# Checkpoint tải thủ công từ Kaggle Output — nặng, lưu Drive, không lưu repo.
+checkpoints/
+
+# Repo train/render 3DGS — clone lại mỗi lần chạy trên Kaggle, không lưu trong repo này.
+gaussian-splatting/
+
+# Bài nộp đóng gói / zip khác — build artifact.
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Môi trường ảo
+venv/
+.venv/
+env/
+
+# Hệ điều hành
+.DS_Store
+Thumbs.db
+
+# Phòng lỡ tạo file chứa secret cục bộ
+.env
+*.token
