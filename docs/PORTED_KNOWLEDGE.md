@@ -556,6 +556,41 @@ chỉ tin đã sửa xong sau khi sửa đúng đoạn được trích dẫn đ�
     thế hoàn toàn 1 lần chạy với chính dataset thật của cuộc thi, nhưng là bước tiến so
     với "chỉ đọc code" đã lặp lại ở 8 pass trước.
 
+## 6j. Kiến thức MỚI xác nhận thật ở verification pass #10 (`docs/MILESTONE_13_verification_pass10.md`) — KHÔNG phải bug
+
+Pass này mở rộng real-data coverage của pass #9 sang `05_generate_error_mask.py`
+(phần không cần CUDA) và `03_render_test_poses.py`→`07_package_submission.py`, cả
+2 luồng chạy thật bằng `pycolmap.synthesize_dataset()` + fake `GS_REPO` (code thật
+không-CUDA từ commit pin + stub tối thiểu rasterizer/`GaussianModel`) — **KHÔNG tìm
+thấy bug nào** trong cả 2 luồng (percentile/weight mask math + 16-bit PNG round-trip
+đúng với ảnh thật có cấu trúc không gian biết trước; `check_scene()` bắt đúng lệch
+1 pixel với `PIL.Image` thật). `pipeline/common/alignment.py` cũng lần đầu được chạy
+thật (không chỉ đọc) — xác nhận đúng số học (Umeyama khôi phục đúng scale/rotation/
+translation từ dữ liệu tổng hợp có đáp án biết trước, sai số ~1e-5), vẫn là dead
+code (0 import trong repo Round 2 hiện tại).
+
+**Phát hiện phụ về hành vi `pycolmap` (KHÔNG phải bug, chỉ là kiến thức mới cần
+biết để không hoảng khi gặp)**: `pycolmap.undistort_images()` (bản 4.1.1) có 1 "fast
+path" — nếu camera `SIMPLE_RADIAL` có tham số méo `k` đúng **bằng 0.0 tuyệt đối**
+(bit-exact), hàm chỉ COPY ảnh nguyên vẹn và **GIỮ NGUYÊN model `SIMPLE_RADIAL`**
+(không convert sang `PINHOLE` như hành vi thông thường/như docstring
+`colmap_runner.py` mô tả). Verify bằng thực thi thật quét `k ∈ {0.0, 0.00001, 0.0001,
+0.001, 0.01}`: CHỈ đúng `k=0.0` tuyệt đối mới giữ nguyên `SIMPLE_RADIAL`, mọi giá trị
+khác (kể cả `0.00001`) đều convert đúng sang `PINHOLE` như bình thường. Nếu tình
+huống này xảy ra thật, `05_generate_error_mask.py::load_train_poses()` (chỉ chấp
+nhận `SIMPLE_PINHOLE`/`PINHOLE`) sẽ `raise ValueError` rõ ràng (fail loudly, không
+phải lỗi âm thầm) — và đối chiếu trực tiếp `scene/dataset_readers.py` gốc của
+`graphdeco-inria/gaussian-splatting` (dòng ~88-98, `assert False, "Colmap camera
+model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras)
+supported!"`) xác nhận **chính `train.py` chính thống cũng crash y hệt** nếu gặp
+tình huống này — không phải rủi ro riêng của script tự viết trong repo này. Về khả
+năng xảy ra thật: `k` là kết quả bundle-adjustment (tối ưu số thực liên tục) từ ảnh
+chụp thật — xác suất hội tụ về đúng bit `0.0` tuyệt đối với ảnh drone/camera thật là
+gần như 0 (khác dữ liệu tổng hợp nơi có thể cố ý đặt `k=0.0`, đây chính xác là lỗi
+mà pass này tự vấp phải lúc đầu khi dựng fixture, trước khi nhận ra và sửa
+`camera_params` test cho khớp). **Kết luận: không cần sửa code gì** — ghi lại ở đây
+để pass sau không tưởng nhầm đây là bug đang active cần vá.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 > **Ghi chú đánh số (thêm ở verification pass #9, xem `docs/MILESTONE_12_verification_
