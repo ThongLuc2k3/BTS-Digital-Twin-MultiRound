@@ -359,6 +359,111 @@ deadline, không chỉ vá đúng phiên bản hiện tại). Điều phối vi�
   cho notebook train/render của thí sinh. `docs/00_MASTER_PLAN.md` đã ghi đúng mức thận
   trọng cần thiết, không cần sửa code.
 
+## 6g. Bug MỚI tìm ra ở verification pass #7 (`docs/MILESTONE_10_verification_pass7.md`)
+
+Pass này audit toàn bộ import/dependency (không tìm thêm gì — cả 4 notebook đã nhất
+quán cài đủ `opencv-python-headless`/`pycolmap>=3.10` từ pass #6), re-audit các fix cũ
+(sạch), rồi đào sâu 1 góc CHƯA pass nào làm: đối chiếu YÊU CẦU (không chỉ CODE) giữa
+`kaggle_round1_baseline.ipynb` (MODE=`"holdout"`/`"final"`) và
+`kaggle_round2_refine.ipynb`/`kaggle_round3_refine.ipynb` (yêu cầu checkpoint Vòng
+trước phải ở MODE nào) — tìm ra **1 bug thật NGHIÊM TRỌNG, dạng "tài liệu tự mâu thuẫn
++ thiếu chặn kỹ thuật", làm hỏng chính cơ chế an toàn cốt lõi của kiến trúc multi-round**
+(mục "chỉ giữ vòng nếu Score tăng THẬT", `docs/00_MASTER_PLAN.md` mục 3.2 bước 4).
+
+**Mô tả bug — rò rỉ dữ liệu (data leakage) nếu dùng checkpoint `MODE="final"` làm input
+Vòng 2+:**
+
+- `kaggle_round1_baseline.ipynb` Bước 5 (markdown, trước khi sửa) ghi: `MODE="final"`
+  "**Đây là checkpoint Vòng 1 dùng làm điểm khởi đầu cho Vòng 2+**" — và Bước 6 ghi:
+  nếu `MODE="holdout"` thì "**KHÔNG dùng làm input Vòng 2+**". Tức là tài liệu Vòng 1
+  khẳng định: dùng `"final"` (100% ảnh train, 30000 iteration) làm input Vòng 2+, KHÔNG
+  dùng `"holdout"`.
+- NHƯNG `kaggle_round2_refine.ipynb`/`kaggle_round3_refine.ipynb` (cell đầu, markdown,
+  không đổi từ lúc viết ở milestone 02) lại ghi NGƯỢC LẠI: "**Yêu cầu: checkpoint Vòng 1
+  đã train ở `MODE="holdout"`** (cần GT holdout để tự đo Score)".
+- **2 tài liệu MÂU THUẪN TRỰC TIẾP nhau** — không ai trong 6 pass trước đối chiếu chéo
+  đúng câu chữ "MODE nào làm input Vòng 2+" giữa 2 cặp notebook (dù đã đối chiếu rất kỹ
+  nhiều thứ khác: schema JSON, CLI contract, tên file...).
+- **Xác định bên nào đúng bằng cách đọc CODE THẬT (không suy đoán)**: `kaggle_round2_
+  refine.ipynb` Bước 7 (cell tái tạo `colmap/dense/`) LUÔN gọi
+  `00_make_holdout_split.py` (nếu `holdout/` chưa tồn tại trong phiên Kaggle hiện tại —
+  luôn đúng vì Vòng 2+ chạy ở phiên Kaggle MỚI, tách biệt hoàn toàn khỏi phiên Vòng 1)
+  rồi `01_run_colmap.py --holdout` — tạo lại **ĐÚNG 1 tập holdout cố định** (
+  `00_make_holdout_split.py` dùng `seed=42` cố định + thuật toán chọn index cách đều
+  theo tên đã sort — xác nhận đọc trực tiếp `choose_holdout_names()`: hoàn toàn
+  deterministic, KHÔNG phụ thuộc gì vào lịch sử phiên trước). Bước 8 (đo Score TRƯỚC)
+  render checkpoint VỪA NẠP trên đúng `holdout_poses.csv` này để tính Score baseline.
+  **Nếu checkpoint vừa nạp là `MODE="final"`** (train trên 100% ảnh, bao gồm CHÍNH các
+  ảnh mà `00_make_holdout_split.py` sẽ chọn làm holdout ở phiên Vòng 2 này — vì cùng
+  scene + cùng seed=42 luôn cho cùng 1 tập ảnh) **thì model ĐÃ "thấy" các ảnh holdout đó
+  lúc train `final`** — Score TRƯỚC đo được là **RÒ RỈ DỮ LIỆU** (đo trên ảnh model đã
+  học thuộc, không phải đo generalization thật). Ngược lại, checkpoint `MODE="holdout"`
+  (train CHỈ trên phần loại-trừ-holdout, cùng seed=42 nên cùng đúng tập ảnh) chưa từng
+  "thấy" các ảnh holdout — Score TRƯỚC đo được SẠCH, đúng ý nghĩa.
+- **Hậu quả THẬT (không phải lý thuyết suông)**: nếu 1 người dùng làm đúng theo hướng
+  dẫn CŨ của `kaggle_round1_baseline.ipynb` (dùng `"final"` làm input Vòng 2+, đúng như
+  văn bản khuyến nghị lúc đó), Score TRƯỚC sẽ bị thổi phồng giả tạo (model đã học thuộc
+  ảnh "test" nội bộ) — refine 1 đợt NGẮN (chỉ chỉnh trên phần ảnh KHÔNG-holdout, mask lỗi
+  đo trên ảnh train) rất có thể làm Score SAU đo thấp hơn Score TRƯỚC giả tạo đó (dù
+  chất lượng generalization THẬT có thể đã tăng) → notebook kết luận SAI "KHÔNG cải
+  thiện, GIỮ checkpoint Vòng 1, DỪNG LẠI" — **âm thầm loại bỏ 1 cải tiến thật có ích**,
+  không có lỗi/crash nào báo hiệu có gì bất thường. Đây đúng loại lỗi nguy hiểm nhất
+  theo tinh thần `docs/00_MASTER_PLAN.md` mục 3.2 bước 4 ("KHÔNG tin bằng trực giác,
+  luôn đo Score thật") — chính phép ĐO lại là thứ bị hỏng, không phải thuật toán refine.
+- **KHÔNG phải lỗi crash/exception** — trước khi sửa, không có bất kỳ cơ chế nào (code
+  hay cảnh báo) phát hiện việc nạp nhầm checkpoint `MODE="final"` vào Vòng 2+; mọi thứ
+  "chạy được" bình thường, chỉ có Ý NGHĨA của con số Score bị hỏng âm thầm.
+
+**Đã sửa (thay đổi tối thiểu, chỉ thêm — không đổi hành vi cũ khi field mới vắng mặt):**
+
+1. `pipeline/scripts/02_train_baseline.sh` — thêm biến môi trường `TRAIN_MODE`
+   (`"holdout"`/`"final"`/để trống), ghi thêm field `"train_mode"` vào
+   `pipeline_train_flags.json` (giá trị JSON string hoặc `null` nếu không truyền) —
+   THUẦN GHI CHÚ, không ảnh hưởng logic train nào (giống cách 3 field
+   `depth_prior`/`exposure_comp`/`antenna_focus` cũ đã làm).
+2. `pipeline/kaggle_round1_baseline.ipynb` — Bước 5 (cell train): thêm dòng
+   `os.environ["TRAIN_MODE"] = MODE` trước khi gọi `02_train_baseline.sh`. Sửa lại
+   NGÔN TỪ Bước 5/Bước 6 (markdown) cho ĐÚNG kỹ thuật: `MODE="holdout"` PHẢI dùng làm
+   input Vòng 2+ nếu định refine tiếp (KHÔNG phải `"final"` như bản cũ ghi sai);
+   `MODE="final"` chỉ dùng để NỘP BÀI TRỰC TIẾP nếu KHÔNG chạy thêm Vòng 2+.
+3. `pipeline/kaggle_round2_refine.ipynb`/`kaggle_round3_refine.ipynb` — Bước 6 (cell tải
+   checkpoint): thêm chặn cứng đọc lại `pipeline_train_flags.json["train_mode"]` — nếu
+   `"final"`, `raise SystemExit` với thông báo rõ nguyên nhân + hướng khắc phục (dùng
+   đúng checkpoint `MODE="holdout"`); nếu field vắng mặt (checkpoint train TRƯỚC khi có
+   field này, hoặc train trực tiếp CLI không qua notebook), in `[CẢNH BÁO]` rõ ràng
+   (không chặn, để giữ tương thích ngược) thay vì im lặng hoàn toàn.
+4. `docs/00_MASTER_PLAN.md` mục 3.2 bước 1 — thêm ghi chú BẮT BUỘC checkpoint input
+   Vòng 2+ phải là `MODE="holdout"`.
+
+**Verify**: `bash -n`/`py_compile`/`nbformat.validate()` sạch sau sửa; chạy thật
+`02_train_baseline.sh` với `train.py` giả qua cả 2 trường hợp `TRAIN_MODE=holdout` và
+không set `TRAIN_MODE` — xác nhận `pipeline_train_flags.json` ghi đúng
+`"train_mode": "holdout"` / `"train_mode": null` tương ứng; test logic 3 nhánh chặn
+(`"final"` → raise, `None` → cảnh báo tiếp tục, `"holdout"` → im lặng qua) bằng đoạn
+code trích y hệt từ notebook. Test suite `tests/test_syntax_all.py` (15/15 + 4/4) +
+`tests/test_07_package_submission.py` (21/21) vẫn PASS 100%, không regression.
+
+**Giới hạn còn lại (ghi rõ, không giấu — đây là đánh đổi THIẾT KẾ, không phải bug, chưa
+sửa vì ngoài phạm vi "fix an toàn" của 1 pass verify):** kiến trúc hiện tại buộc: muốn
+Vòng 2+ (refine) có phép đo Score hợp lệ, checkpoint carry-forward xuyên suốt MỌI vòng
+sau đó vĩnh viễn chỉ dựa trên ~87.5% ảnh train (phần loại-trừ-holdout) + khởi đầu từ
+15000 iteration (không phải 30000 của `"final"`) — chưa có cơ chế tự động "nâng cấp" 1
+cấu hình refine đã validate-bằng-holdout lên bản `MODE="final"` 100% dữ liệu để nộp bài
+(vd train lại `"final"` từ đầu rồi áp lại đúng số `REFINE_ITERATIONS`/`MAX_ERROR_WEIGHT`
+đã biết là có lợi, KHÔNG cần đo lại Score). Đây là hạn chế đã biết của kiến trúc, cần
+quyết định của người dùng (đánh đổi ít dữ liệu hơn nhưng có validate được, hay nhiều dữ
+liệu hơn nhưng không refine/không tự validate) — không tự ý mở rộng sửa thêm ở pass này.
+
+Ngoài bug trên, đã audit exhaustive **toàn bộ import/dependency** của mọi
+`pipeline/scripts/*.py` + `pipeline/common/*.py` đối chiếu với `!pip install` của cả 4
+notebook (theo đúng yêu cầu — bug class `cv2`/`opencv-python` pass #6 tìm được có lặp
+lại chỗ khác không): `pycolmap`/`scikit-image`/`lpips`/`cv2` đều đã được cài đủ và nhất
+quán ở cả 4 notebook (`opencv-python-headless`, `pycolmap>=3.10` từ fix pass #6) —
+KHÔNG tìm thêm instance thứ 2 của bug class này. `plyfile`/`tqdm` được cài nhưng KHÔNG
+được import trực tiếp bởi bất kỳ script nào trong repo này — xác nhận đây là dependency
+của CHÍNH `train.py`/`scene/gaussian_model.py` (repo `graphdeco-inria/gaussian-splatting`
+ngoài), cài đúng theo nguyên tắc "superset" đã áp dụng sẵn — không phải thiếu sót.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify

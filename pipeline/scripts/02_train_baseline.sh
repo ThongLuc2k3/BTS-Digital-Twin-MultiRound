@@ -82,6 +82,18 @@ DENSIFY_GRAD_THRESHOLD="${DENSIFY_GRAD_THRESHOLD:-0.0002}"
 RESOLUTION="${RESOLUTION:--1}"
 CLEANUP_DENSE_IMAGES="${CLEANUP_DENSE_IMAGES:-1}"
 ANTIALIASING="${ANTIALIASING:-1}"
+# TRAIN_MODE: chỉ để GHI CHÚ lại trong pipeline_train_flags.json ("holdout"/"final"/để
+# trống), do notebook gọi script này truyền vào (không ảnh hưởng logic train nào ở đây
+# — SOURCE_DIR đã được 01_run_colmap.py chuẩn bị đúng theo mode TRƯỚC khi script này
+# chạy). Mục đích: cho phép Vòng 2+ (06_train_refine.sh/kaggle_round2_refine.ipynb) tự
+# phát hiện + CHẶN CỨNG nếu ai đó lỡ dùng nhầm checkpoint MODE="final" (train trên 100%
+# ảnh, không loại phần holdout) làm input Vòng 2+ — trước đây không có field này nên
+# không thể tự phát hiện: Vòng 2+ LUÔN tự dựng lại đúng 1 tập holdout cố định (seed=42)
+# để đo Score trước/sau, nếu checkpoint nạp vào đã "thấy" chính các ảnh holdout đó lúc
+# train (đúng trường hợp MODE="final") thì phép đo Score TRƯỚC bị RÒ RỈ DỮ LIỆU (model
+# đã học thuộc ảnh đó), làm toàn bộ cơ chế "chỉ giữ vòng nếu Score tăng thật" mất ý
+# nghĩa mà KHÔNG có lỗi báo — xem docs/PORTED_KNOWLEDGE.md mục 6g.
+TRAIN_MODE="${TRAIN_MODE:-}"
 
 if [[ $# -eq 0 ]]; then
   echo "Cách dùng: $0 <scene1> [scene2 ...]" >&2
@@ -262,8 +274,13 @@ for SCENE in "$@"; do
   # ra 1 file riêng để 03_render_test_poses.py đọc lại — GIỮ NGUYÊN schema cũ
   # (depth_prior/exposure_comp/antenna_focus luôn false vì script này không hỗ
   # trợ) để mọi code downstream đọc các key đó không bị lỗi thiếu key.
+  if [[ -n "$TRAIN_MODE" ]]; then
+    TRAIN_MODE_JSON="\"$TRAIN_MODE\""
+  else
+    TRAIN_MODE_JSON="null"
+  fi
   cat > "$MODEL_DIR/pipeline_train_flags.json" <<EOF
-{"antialiasing": $( [[ "$ANTIALIASING" == "1" ]] && echo true || echo false ), "depth_prior": false, "exposure_comp": false, "antenna_focus": false}
+{"antialiasing": $( [[ "$ANTIALIASING" == "1" ]] && echo true || echo false ), "depth_prior": false, "exposure_comp": false, "antenna_focus": false, "train_mode": $TRAIN_MODE_JSON}
 EOF
 
   if [[ "$CLEANUP_DENSE_IMAGES" == "1" && -d "$SOURCE_DIR/images" ]]; then

@@ -84,6 +84,10 @@ Cơ chế (đã build + verify cục bộ ở repo cũ ngày 2026-07-18, port ng
 
 1. Nạp checkpoint vòng trước (`.ply`, KHÔNG cần `.pth` — dùng
    `Scene(..., load_iteration=N)` của repo gốc, kèm fix `spatial_lr_scale` bắt buộc).
+   **BẮT BUỘC là checkpoint Vòng 1 train ở `MODE="holdout"`, KHÔNG phải `"final"`**
+   (phát hiện ở verification pass #7, xem `docs/PORTED_KNOWLEDGE.md` mục 6g — dùng
+   nhầm checkpoint `"final"` làm rò rỉ dữ liệu vào phép đo Score bước 4 dưới đây mà
+   không có lỗi báo).
 2. Render lại CHÍNH pose ảnh train, so với GT thật (luôn có, khác test) → đo lỗi
    pixel → sinh mask trọng số theo percentile (vùng lỗi cao được ưu tiên loss).
 3. Vá `train.py` (`apply_error_refine_patch.py`) để nhận mask, train tiếp NGẮN
