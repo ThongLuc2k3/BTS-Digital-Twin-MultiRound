@@ -518,7 +518,55 @@ trích dẫn/nêu tên trong report (ở đây là "câu chủ đề đầu cell
 văn bản NÀO KHÁC trong CÙNG file/cell nói cùng 1 điều, có thể đã bị bỏ sót không" — không
 chỉ tin đã sửa xong sau khi sửa đúng đoạn được trích dẫn đầu tiên tìm thấy.
 
+## 6i. Bug MỚI tìm ra + xác nhận thật (không mock) ở verification pass #9 (`docs/MILESTONE_12_verification_pass9.md`)
+
+- **`docs/00_MASTER_PLAN.md` mục 3.1 trỏ SAI "mục 6" (Triết lý test) thay vì "mục 2"
+  (Train) của chính file này** khi dẫn nguồn cho tuyên bố "`--antialiasing` BẬT, không
+  depth-prior/antenna-focus/exposure-comp — đã đo KHÔNG cải thiện Score". Nội dung đo
+  đạc thật (Score `HCM0421` depth-prior 0.644 vs 0.6616, antenna-focus 0.6611 vs 0.6616)
+  nằm ở mục 2, không phải mục 6 (mục 6 là quy tắc kiểm thử chung, không liên quan). Lỗi
+  có từ commit khởi tạo repo (`920519f`), không đổi qua bất kỳ commit nào sau đó — 8 pass
+  verify trước đều đọc `00_MASTER_PLAN.md` theo yêu cầu STEP 0 nhưng không ai bấm vào
+  kiểm tra "mục 6" có thật chứa nội dung được trỏ tới hay không. Không ảnh hưởng code/
+  hành vi (thuần tham chiếu tài liệu) nhưng vi phạm đúng lời hứa "nguồn sự thật duy nhất"
+  ở đầu chính file đó — người đọc theo đúng chỉ dẫn sẽ mở nhầm mục, có thể nghi ngờ nhầm
+  tuyên bố chưa được kiểm chứng. **Đã sửa**: đổi thành "mục 2".
+- **Lần đầu chạy THẬT (không mock) `00_make_holdout_split.py`/`01_run_colmap.py` bằng
+  `pycolmap` cài thật (bản `4.1.1`, cài trong vài giây, không cần venv nặng) + dữ liệu
+  COLMAP tổng hợp thật qua `pycolmap.synthesize_dataset()`** — hạng mục bị liệt "còn
+  thiếu, cần `pycolmap` cài thật" liên tục từ pass #1 (`MILESTONE_04`) tới pass #8
+  (`MILESTONE_11`), 8 pass liền không ai thử cài. Kết quả: **KHÔNG tìm thấy bug** — xác
+  nhận lại bằng dữ liệu `pycolmap.Reconstruction` thật (không phải chỉ đọc code):
+  - Thứ tự đảo quaternion `[x,y,z,w] -> qw,qx,qy,qz` trong `00_make_holdout_split.py`
+    đúng chính xác (so trực tiếp `image.cam_from_world().rotation.quat` gốc với dòng CSV
+    tương ứng — khớp).
+  - `01_run_colmap.py` (qua `common/colmap_runner.py::use_provided_sparse()`) chạy sạch,
+    dùng thuần `pycolmap.undistort_images()` (đúng docstring "không cần binary `colmap`
+    CLI riêng"), tự loại đúng ảnh holdout thiếu file khỏi reconstruction trước khi
+    undistort (`_find_missing_images()`/`deregister_frame()` hoạt động đúng).
+  - **Câu hỏi phụ tự đặt ra khi thấy `pycolmap` 4.1.1 ghi thêm `rigs.bin`/`frames.bin`**
+    (định dạng rig mới, KHÔNG có trong sparse COLMAP cổ điển 3 file mà
+    `graphdeco-inria/gaussian-splatting` mong đợi, và nhiều khả năng BTC cũng cung cấp
+    dạng cổ điển vì `has_valid_provided_sparse()` chỉ kiểm tra `cameras.bin`): verify
+    bằng thực thi thật — xoá `rigs.bin`/`frames.bin` khỏi 1 bản copy, `pycolmap.
+    Reconstruction()` vẫn đọc đúng đủ ảnh/camera/điểm 3D, không lỗi. Xác nhận KHÔNG có
+    rủi ro tương thích ngược giữa `pycolmap` bản mới và sparse định dạng cổ điển.
+  - Giới hạn còn lại: scene tổng hợp qua `synthesize_dataset()` đơn giản hơn nhiều so
+    với 7 scene thật (1 camera, quỹ đạo tổng hợp, không méo ống kính) — vẫn chưa thay
+    thế hoàn toàn 1 lần chạy với chính dataset thật của cuộc thi, nhưng là bước tiến so
+    với "chỉ đọc code" đã lặp lại ở 8 pass trước.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
+
+> **Ghi chú đánh số (thêm ở verification pass #9, xem `docs/MILESTONE_12_verification_
+> pass9.md` Phần E):** mục "6" này (triết lý test) là mục GỐC từ bản đầu tiên của file,
+> viết trước khi có bug nào được thêm — các mục "6b"–"6i" ở TRÊN (vật lý đứng trước mục
+> "6" này) là bug MỚI tìm theo từng verification pass, thêm theo đúng thứ tự thời gian
+> (quy ước append-only, không đổi số mục cũ để khỏi phải sửa lại mọi chỗ đã trích dẫn
+> "mục 6g"/"mục 6h"...). Đã cân nhắc đổi số mục này thành "7" cho gọn thứ tự đọc nhưng
+> QUYẾT ĐỊNH KHÔNG đổi ở pass #9 (yêu cầu nhiệm vụ: không tổ chức lại file này) — ghi chú
+> lại đây để pass đọc sau không thấy khó hiểu vì "6" xuất hiện sau "6h"/"6i" mà không có
+> "6a".
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify
   được trên Kaggle. Nhưng vẫn phải test cục bộ MỌI THỨ có thể test được trước khi tin

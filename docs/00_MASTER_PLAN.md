@@ -69,7 +69,7 @@ vài scene (xem bug scale mục đó) — PHẢI tự đo scale runtime, không 
 Train 3DGS chuẩn 1 lần/scene bằng `graphdeco-inria/gaussian-splatting` (commit pin
 `54c035f7834b564019656c3e3fcc3646292f727d` — bản đã xác nhận có `--antialiasing`
 (mip-splatting tích hợp sẵn), `--depths` (depth reg), `--train_test_exp` (exposure)).
-Cấu hình mặc định (đã đo thật ở repo cũ, xem mục 6 `PORTED_KNOWLEDGE.md`):
+Cấu hình mặc định (đã đo thật ở repo cũ, xem mục 2 `PORTED_KNOWLEDGE.md`):
 `--antialiasing` BẬT, không depth-prior, không antenna-focus, không exposure-comp —
 các cờ đó đã đo KHÔNG cải thiện Score đo được trên holdout thật (HCM0421), giữ baseline
 đơn giản là lựa chọn tốt nhất đã kiểm chứng.
