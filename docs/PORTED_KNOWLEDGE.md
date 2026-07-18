@@ -157,6 +157,43 @@ sở hữu 1 phần):
   Bước 2 — clone + build gaussian-splatting), PHẢI đối chiếu cả N bản với nhau (diff),
   không chỉ tự tin bản mình port đúng.
 
+## 6c. Bug MỚI tìm ra ở verification pass #2 (`docs/MILESTONE_05_verification_pass2.md`)
+
+- **`02_train_baseline.sh` — thông báo "[CỨU ĐƯỢC]" (rescue message) khi train crash
+  giữa chừng chọn NHẦM checkpoint NHỎ HƠN** (vd báo `iteration_7000` trong khi
+  `iteration_15000` mới là checkpoint lớn nhất/mới nhất còn sống sót). Nguyên nhân: dòng
+  `LAST_CKPT=$(ls -d "$MODEL_DIR"/point_cloud/iteration_* | sort -t_ -k2 -n | tail -1)`
+  dùng đúng bug class đã được milestone 02 (`docs/MILESTONE_02_refine_pipeline.md`) tự
+  phát hiện + fix ở `06_train_refine.sh` (`_latest_iteration_dir()`) — nhưng KHÔNG được
+  backport lại vào `02_train_baseline.sh`, script gốc/sinh ra thông báo cứu hộ tương tự.
+  Lý do bug thật (đã verify bằng lệnh `sort` thật): đường dẫn model đầy đủ chứa NHIỀU
+  dấu `_` đứng TRƯỚC "iteration_N" (`gs_model`, `point_cloud` đều có `_`), nên field số 2
+  (`-k2`, tách theo `_`) KHÔNG phải là số iteration — `sort -n` coi field đó là `0`
+  (không parse được số), sort giữ nguyên thứ tự lexical gốc của `ls -d` (glob liệt kê
+  "iteration_15000" TRƯỚC "iteration_7000" vì ký tự '1' < '7'), nên `tail -1` chọn nhầm
+  "iteration_7000" — checkpoint CŨ HƠN, kém train hơn. Đây CHỈ là bug ở dòng thông báo
+  (không dùng để quyết định logic nào khác trong script), nhưng có thể khiến người dùng
+  dưới áp lực deadline tin nhầm và dùng checkpoint kém hơn để render/nộp bài. Đã verify
+  bằng test thật (`train.py` giả, `ITERATIONS=18500`, `CRASH_AT=18000` — đã qua cả 2
+  checkpoint 7000 và 15000): trước khi sửa, thông báo trỏ sai vào `iteration_7000`; sau
+  khi sửa (thêm hàm `_latest_iteration_dir()` bash thuần, so số nguyên, không tách
+  trường theo `_`/khoảng trắng — y hệt cách `06_train_refine.sh` đã làm), thông báo trỏ
+  đúng `iteration_15000`. **Đã sửa**: `pipeline/scripts/02_train_baseline.sh` — thêm
+  `_latest_iteration_dir()`, thay `LAST_CKPT=$(ls -d ... | sort -t_ -k2 -n | tail -1)`
+  bằng `LAST_CKPT="$(_latest_iteration_dir "$MODEL_DIR")"`.
+  Bài học: khi 1 bug class được phát hiện + fix ở 1 file, PHẢI tự hỏi "file nào khác
+  trong repo có ĐOẠN CODE TƯƠNG TỰ (copy/port từ cùng 1 nguồn, hoặc cùng tác giả viết
+  cùng lúc) có thể dính CÙNG bug này chưa được kiểm tra?" — không chỉ coi bug đã "xử lý
+  xong" sau khi fix đúng 1 chỗ tìm thấy nó đầu tiên.
+- Đã re-verify (không tìm thêm bug mới): 2 fix của pass #1 (`eval_metrics.txt`->`.csv`
+  ở notebook Vòng 2/3, `git submodule update` ở `kaggle_submission.ipynb`) — đối chiếu
+  trực tiếp `04_eval_metrics.py::write_csv()` (ghi `renders_root/<scene>/eval_metrics.csv`,
+  `renders_root` mặc định = `pipeline/work`) khớp CHÍNH XÁC đường dẫn
+  `/kaggle/working/pipeline/work/{SCENE}/eval_metrics.csv` mà cả 2 notebook Vòng 2/3 đọc
+  lại (không chỉ tên file — cả thư mục cũng khớp); và diff byte-for-byte cell clone
+  `gaussian-splatting` của cả 4 notebook xác nhận thứ tự `git checkout <pin>` rồi mới
+  `git submodule update --init --recursive` giống hệt nhau ở cả 4 file.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify

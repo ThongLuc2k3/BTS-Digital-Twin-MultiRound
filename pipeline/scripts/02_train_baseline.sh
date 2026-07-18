@@ -105,6 +105,33 @@ for v in 7000 15000 "$ITERATIONS"; do
 done
 SAVE_ITERATIONS=($(printf "%s\n" "${SAVE_ITERATIONS[@]}" | awk '!seen[$0]++'))
 
+# Tự dò thư mục point_cloud/iteration_<N> có N LỚN NHẤT trong 1 MODEL_DIR — dùng cho
+# thông báo "[CỨU ĐƯỢC]" khi train thất bại giữa chừng (bên dưới). KHÔNG dùng
+# `ls | sort -t_ -k2 -n | tail -1`: đã tự phát hiện bug thật (xem
+# `pipeline/scripts/06_train_refine.sh` — cùng bug class đã fix ở đó) — đường dẫn thật chứa NHIỀU
+# dấu "_" khác đứng TRƯỚC "iteration_N" (vd "gs_model", "point_cloud"), nên trường số 2
+# (-k2) không phải là số iteration; kết quả `sort -n` coi field đó là 0 (không phải
+# số), sort giữ nguyên thứ tự lexical của `ls` (vd "iteration_15000" đứng TRƯỚC
+# "iteration_7000" vì '1' < '7'), khiến `tail -1` chọn NHẦM checkpoint NHỎ HƠN
+# (7000) thay vì lớn hơn thật sự (15000) — sai lệch thông báo cứu hộ, có thể khiến
+# người dùng dùng nhầm checkpoint kém train hơn. Sửa bằng vòng lặp bash thuần, so sánh
+# số nguyên, không tách trường theo dấu "_"/khoảng trắng ở đâu cả (đường dẫn dự án thật
+# còn chứa dấu cách "Khóa Luận Tốt Nghiệp" nữa, awk/sort trên đó cũng không an toàn).
+_latest_iteration_dir() {
+  local model_dir="$1" d n best_n=-1 best_d=""
+  for d in "$model_dir"/point_cloud/iteration_*/; do
+    [[ -d "$d" ]] || continue
+    d="${d%/}"
+    n="${d##*/iteration_}"
+    [[ "$n" =~ ^[0-9]+$ ]] || continue
+    if (( 10#$n > best_n )); then
+      best_n=$((10#$n))
+      best_d="$d"
+    fi
+  done
+  [[ -n "$best_d" ]] && printf '%s\n' "$best_d"
+}
+
 for SCENE in "$@"; do
   SOURCE_DIR="$PIPELINE_DIR/work/$SCENE/colmap/dense"
   MODEL_DIR="$PIPELINE_DIR/work/$SCENE/gs_model"
@@ -180,7 +207,7 @@ for SCENE in "$@"; do
   if [[ $STATUS -ne 0 ]]; then
     echo "[LỖI] Train thất bại cho $SCENE (exit $STATUS) — 50 dòng cuối log:" >&2
     tail -n 50 "$LOG_FILE" >&2
-    LAST_CKPT=$(ls -d "$MODEL_DIR"/point_cloud/iteration_* 2>/dev/null | sort -t_ -k2 -n | tail -1 || true)
+    LAST_CKPT="$(_latest_iteration_dir "$MODEL_DIR")"
     if [[ -n "$LAST_CKPT" ]]; then
       echo "[CỨU ĐƯỢC] Vẫn còn checkpoint gần nhất tại: $LAST_CKPT (dùng tạm để render nếu cần)." >&2
     fi
