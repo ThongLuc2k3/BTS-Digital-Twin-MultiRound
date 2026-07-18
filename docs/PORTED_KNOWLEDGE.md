@@ -464,6 +464,60 @@ KHÔNG tìm thêm instance thứ 2 của bug class này. `plyfile`/`tqdm` đư�
 của CHÍNH `train.py`/`scene/gaussian_model.py` (repo `graphdeco-inria/gaussian-splatting`
 ngoài), cài đúng theo nguyên tắc "superset" đã áp dụng sẵn — không phải thiếu sót.
 
+## 6h. Bug MỚI tìm ra ở verification pass #8 (`docs/MILESTONE_11_verification_pass8.md`)
+
+Pass này đào sâu re-audit fix `train_mode` của pass #7 (mục 6g) từ góc "guard có đủ lớp
+phòng thủ không, hay chỉ có 1 lớp dễ bị bypass" + đọc lại toàn bộ tài liệu 1 lượt liền
+mạch tìm chỗ 2 pass khác nhau "đá nhau" — tìm ra **2 vấn đề thật**:
+
+1. **`pipeline/scripts/06_train_refine.sh` không tự kiểm tra `train_mode` — chặn cứng
+   pass #7 thêm CHỈ tồn tại ở cell Python "Bước 6" của notebook** (chạy 1 LẦN lúc tải
+   checkpoint từ Drive), không có ở bất kỳ đâu trong chính script `.sh` (dù script này
+   đã đọc `pipeline_train_flags.json` ngay trong nó để lấy `antialiasing`). Verify bằng
+   thực thi thật: gọi thẳng `06_train_refine.sh` (bỏ qua notebook hoàn toàn) trên 1
+   checkpoint có `"train_mode": "final"` — script chạy xong, exit 0, không cảnh báo gì.
+   Kịch bản thật: chạy lại 1 cell riêng lẻ ngoài thứ tự trên Kaggle (không bắt buộc
+   "Run All"), dùng terminal Kaggle gọi thẳng script, hoặc copy dòng lệnh bash ra cell
+   khác để debug mà quên chạy lại cell "Bước 6" (guard) trước đó cùng phiên — guard ở
+   notebook không có cơ hội chạy, rò rỉ dữ liệu (mục 6g) vẫn xảy ra ÂM THẦM. Đáng chú ý:
+   comment do CHÍNH pass #7 viết trong `02_train_baseline.sh` (biến `TRAIN_MODE`) đã
+   tuyên bố "Vòng 2+ (`06_train_refine.sh`/`kaggle_round2_refine.ipynb`) tự phát hiện +
+   CHẶN CỨNG" — tuyên bố SAI ở phần `06_train_refine.sh` tại thời điểm viết (chỉ đúng
+   cho notebook), pass #7 overstate implementation thật. **Đã sửa**: thêm đọc
+   `train_mode` vào đúng đoạn Python heredoc đã đọc `antialiasing`/`sh_degree` trong
+   `06_train_refine.sh`, lặp lại đúng 3 nhánh xử lý y hệt cell Python của notebook
+   (`"final"` → `[LỖI]` + `exit 1`, trừ khi `ALLOW_FINAL_TRAIN_MODE=1` — escape hatch
+   theo đúng pattern có sẵn trong repo như `CLEAN_MODEL_DIR=1`; vắng mặt → `[CẢNH BÁO]`
+   không chặn; `"holdout"`/khác → im lặng qua). Verify bằng thực thi thật 4 kịch bản
+   (final-chặn/final+override/vắng mặt-cảnh báo/holdout-im lặng) — cả 4 đúng thiết kế.
+2. **`kaggle_round1_baseline.ipynb` cell 21 (Bước 6) tự mâu thuẫn giữa câu chủ đề (pass
+   #7 đã sửa đúng) và đoạn "Quy trình đầy đủ cho MỖI scene" ngay bên dưới trong CÙNG 1
+   cell (pass #7 KHÔNG chạm tới)** — `git show 99ed04d` xác nhận pass #7 chỉ sửa câu chủ
+   đề đầu cell (từ "Chỉ làm bước này khi MODE='final'." SAI thành có thêm điều kiện
+   "...VÀ bạn KHÔNG định chạy thêm Vòng 2+" + giải thích đúng holdout mới là input Vòng
+   2+), nhưng đoạn "Quy trình đầy đủ" 4 dòng ngay dưới đó vẫn giữ NGUYÊN VĂN CŨ: "Chạy 1
+   version cuối với `MODE="final"` — đây là checkpoint Vòng 1 chính thức, làm **input
+   cho Vòng 2+**..." — **chính xác hướng dẫn nguy hiểm mà toàn bộ fix pass #7 nhằm loại
+   bỏ**, vẫn còn nguyên trong cùng 1 cell với đoạn văn vừa sửa đúng ngay phía trên. Hậu
+   quả kỹ thuật đã được giảm nhẹ SẴN bởi Bug #1 (guard ở cell 16 notebook Vòng 2+ vẫn
+   chặn được nếu người dùng làm theo hướng dẫn sai này) nhưng vẫn tốn thời gian/quota
+   Kaggle oan uổng (train 30000 iteration `MODE="final"` rồi mới bị chặn) — đúng loại
+   "tài liệu tự mâu thuẫn gây nhầm lẫn người dùng thật" cần audit theo tinh thần dự án.
+   **Đã sửa**: viết lại cell 21 — câu chủ đề thành 2 gạch đầu dòng tách rõ mục đích
+   TỪNG `MODE` (đều "làm bước này", chỉ khác lý do/đích đến), sửa "Quy trình đầy đủ"
+   bước 2 cho khớp (`MODE="final"` — KHÔNG dùng làm input Vòng 2+, chỉ nộp bài trực
+   tiếp) + thêm 1 dòng ở bước 1 nhắc tải checkpoint `holdout` lên Drive nếu định chạy
+   Vòng 2+. Grep lại toàn bộ 4 notebook + `docs/*.md` sau khi sửa — không còn instance
+   thứ 3 nào của claim sai này.
+
+Bài học: 1 fix "chặn cứng" chỉ đặt ở ĐÚNG 1 lớp (notebook) trong khi logic thật thực thi
+ở 1 lớp KHÁC (shell script được gọi từ notebook nhưng cũng gọi được độc lập) là chưa đủ
+— nếu lớp ngoài (notebook) bị bypass (thứ tự cell không tuyến tính, chạy lại 1 phần, gọi
+trực tiếp), lớp trong không có gì tự bảo vệ. Cũng: khi 1 fix chỉ sửa ĐÚNG phần văn bản bị
+trích dẫn/nêu tên trong report (ở đây là "câu chủ đề đầu cell"), phải tự hỏi "còn đoạn
+văn bản NÀO KHÁC trong CÙNG file/cell nói cùng 1 điều, có thể đã bị bỏ sót không" — không
+chỉ tin đã sửa xong sau khi sửa đúng đoạn được trích dẫn đầu tiên tìm thấy.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify

@@ -244,12 +244,14 @@ if cfg_path.exists():
         print(f"WARN không đọc được cfg_args: {e}", file=sys.stderr)
 
 antialiasing = False
+train_mode = None
 flags_path = model_dir / "pipeline_train_flags.json"
 have_flags = flags_path.exists()
 if have_flags:
     try:
         flags = json.loads(flags_path.read_text())
         antialiasing = bool(flags.get("antialiasing", False))
+        train_mode = flags.get("train_mode")
     except Exception as e:
         print(f"WARN không đọc được pipeline_train_flags.json: {e}", file=sys.stderr)
         have_flags = False
@@ -257,6 +259,7 @@ if have_flags:
 print(f"SH_DEGREE_DETECTED={sh_degree}")
 print(f"ANTIALIASING_DETECTED={'1' if antialiasing else '0'}")
 print(f"HAVE_FLAGS={'1' if have_flags else '0'}")
+print(f"TRAIN_MODE_DETECTED={train_mode if train_mode is not None else ''}")
 PYEOF
   )"
   eval "$CFG_INFO"
@@ -264,6 +267,37 @@ PYEOF
   if [[ "$HAVE_FLAGS" != "1" ]]; then
     echo "  [$SCENE] [CẢNH BÁO NGHIÊM TRỌNG] Không có pipeline_train_flags.json ở $MODEL_DIR — giả định" >&2
     echo "           antialiasing=false, CÓ THỂ SAI (xem docs/PORTED_KNOWLEDGE.md mục 2)." >&2
+  fi
+
+  # Chặn cứng (defense-in-depth) lặp lại đúng guard "train_mode" mà
+  # kaggle_round2_refine.ipynb/kaggle_round3_refine.ipynb (Bước 6, cell Python) đã có —
+  # xem docs/PORTED_KNOWLEDGE.md mục 6g. Guard ở notebook CHỈ chạy 1 LẦN lúc tải
+  # checkpoint từ Drive (Bước 6) — nếu ai đó gọi THẲNG script này (dán tay lệnh
+  # `bash 06_train_refine.sh <scene>` vào 1 cell/terminal riêng, chạy lại cell không theo
+  # đúng thứ tự Bước 6 -> Bước 10, hoặc gọi script này ngoài notebook hoàn toàn với 1
+  # checkpoint MODE="final" đã có sẵn trong $MODEL_DIR) thì guard ở notebook KHÔNG có cơ
+  # hội chạy — kịch bản rò rỉ dữ liệu (xem mô tả đầy đủ ở đầu file 02_train_baseline.sh,
+  # biến TRAIN_MODE) vẫn xảy ra ÂM THẦM mà không có gì chặn. Lặp lại đúng 3 nhánh xử lý
+  # của notebook ngay TẠI ĐÂY (script thực sự chạy train.py) để không phụ thuộc hoàn
+  # toàn vào kỷ luật gọi đúng thứ tự cell của notebook. Đặt ALLOW_FINAL_TRAIN_MODE=1 để
+  # cố ý bỏ qua chặn này (rủi ro tự chịu, vd biết chắc sẽ không dùng Score đo được ở
+  # notebook để quyết định giữ/bỏ vòng refine này).
+  if [[ "$TRAIN_MODE_DETECTED" == "final" && "${ALLOW_FINAL_TRAIN_MODE:-0}" != "1" ]]; then
+    echo "[LỖI] $SCENE: checkpoint nguồn có train_mode=\"final\" (train trên 100% ảnh, KHÔNG loại" >&2
+    echo "      phần holdout) — KHÔNG được dùng làm input cho error-refine. Mọi notebook Vòng 2+" >&2
+    echo "      đo Score TRƯỚC/SAU bằng cách tự dựng lại ĐÚNG 1 tập holdout cố định (seed=42) —" >&2
+    echo "      nếu checkpoint đã \"thấy\" chính các ảnh đó lúc train (MODE=\"final\"), phép đo Score" >&2
+    echo "      sẽ bị RÒ RỈ DỮ LIỆU mà không có lỗi nào khác báo (xem docs/PORTED_KNOWLEDGE.md mục" >&2
+    echo "      6g). Dùng đúng checkpoint train ở MODE=\"holdout\" của scene này thay vào đó, hoặc" >&2
+    echo "      set ALLOW_FINAL_TRAIN_MODE=1 nếu CỐ Ý muốn refine tiếp mà không quan tâm đo Score" >&2
+    echo "      holdout ở notebook (rủi ro tự chịu)." >&2
+    exit 1
+  elif [[ -z "$TRAIN_MODE_DETECTED" ]]; then
+    echo "  [$SCENE] [CẢNH BÁO] pipeline_train_flags.json không có (hoặc rỗng) field \"train_mode\"" >&2
+    echo "           — checkpoint train trước khi field này tồn tại, hoặc train trực tiếp bằng CLI" >&2
+    echo "           không qua notebook Vòng 1. KHÔNG thể tự xác nhận checkpoint này có loại phần" >&2
+    echo "           holdout lúc train hay không — nếu đây là checkpoint MODE=\"final\", Score" >&2
+    echo "           TRƯỚC/SAU đo được ở notebook Vòng 2+ SẼ KHÔNG CÒN Ý NGHĨA (rò rỉ dữ liệu)." >&2
   fi
 
   THIS_SH_DEGREE="${SH_DEGREE:-$SH_DEGREE_DETECTED}"
