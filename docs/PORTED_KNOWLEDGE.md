@@ -334,6 +334,31 @@ tiếp code hiện tại (không chỉ tin milestone log cũ):
   phòng ngừa), nhưng hiện là kiến thức "ngủ đông" — không có code nào đang thực sự cần
   áp dụng nó. Ghi rõ ở đây để pass sau không tưởng nhầm đây là bug đang active cần fix.
 
+## 6f. Bug MỚI tìm ra ở verification pass #6 (`docs/MILESTONE_09_verification_pass6.md`)
+
+Pass này bị ngắt giữa chừng do hết session quota (không phải phát hiện lỗi khiến dừng)
+— agent gốc kịp pin `gdown` thành `"gdown>=6,<7"` (phòng gdown đổi API tiếp trước
+deadline, không chỉ vá đúng phiên bản hiện tại). Điều phối viên hoàn thiện phần còn lại:
+
+- Verify thật bằng `gdown --help` (bản 6.1.0): `--fuzzy` không tồn tại ở CẢ 2 chế độ
+  (file đơn lẫn `--folder`) — xác nhận fix của pass #5 đã ĐỦ, không cần sửa thêm cho
+  `--folder`.
+- Thêm version floor còn thiếu cho `pycolmap` (`>=3.10`, khớp `requirements.txt` đã
+  kiểm chứng của repo tiền nhiệm — API `pycolmap` từng đổi giữa các bản).
+- **Bug thật độc lập tìm thêm**: `05_generate_error_mask.py` dùng `import cv2` nhưng
+  KHÔNG notebook nào cài `opencv-python` — verify bằng cách đọc thật dòng `!pip install`
+  ở cả 4 notebook (không có) + test `import cv2` trong môi trường sạch
+  (`ModuleNotFoundError`). Không giả định Kaggle có cài sẵn hay không (dù nhiều khả
+  năng CÓ) — đã thêm tường minh `opencv-python-headless` vào cả 4 notebook.
+- Fresh clone thật `graphdeco-inria/gaussian-splatting` hôm nay (không dùng lại clone
+  cũ), áp `apply_error_refine_patch.py` — sạch. Xác nhận pin theo COMMIT HASH (khác pin
+  theo version pip) miễn nhiễm hoàn toàn với upstream đổi code — không cần lo hướng
+  rủi ro này thêm.
+- Fact-check claim "timeout 600 giây" (Đề_bài.md) — kết luận hợp lý: nhiều khả năng là
+  hạ tầng chấm điểm phía BTC (sau khi nộp `submission.zip` qua portal), không áp dụng
+  cho notebook train/render của thí sinh. `docs/00_MASTER_PLAN.md` đã ghi đúng mức thận
+  trọng cần thiết, không cần sửa code.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify
