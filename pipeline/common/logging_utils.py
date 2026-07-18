@@ -1,6 +1,6 @@
 """Ghi log chi tiết ra file riêng theo scene, console chỉ hiện dòng tóm tắt.
 
-Lý do: chạy hàng loạt 13 scene (COLMAP + train 3DGS) sinh ra rất nhiều dòng log
+Lý do: chạy hàng loạt 7 scene (COLMAP + train 3DGS) sinh ra rất nhiều dòng log
 chi tiết (từng bước COLMAP, log nội bộ pycolmap, tqdm progress bar của train.py
 qua 30.000 iteration...) — không cần thiết phải hiện hết trên console/notebook,
 chỉ cần 1-2 dòng tóm tắt mỗi scene. Muốn xem lại chi tiết thì mở file log tương ứng.

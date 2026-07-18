@@ -137,6 +137,26 @@ cục bộ (không GPU) ở repo cũ ngày 2026-07-18 — port nguyên vẹn 2 f
   `50.0` làm ước lượng tham khảo (ghi rõ đây là ước lượng, không phải số chính thức từ
   BTC) khi tự đo Score holdout để so sánh tương đối giữa các cấu hình.
 
+## 6b. Bug MỚI tìm ra ở CHÍNH repo này (không phải từ repo tiền nhiệm)
+
+Tìm ở verification pass #1 (`docs/MILESTONE_04_verification_pass1.md`), khi audit chéo
+giữa các file do các agent khác nhau viết (không ai tự kiểm tra được, vì mỗi agent chỉ
+sở hữu 1 phần):
+
+- **Tên file kết quả `04_eval_metrics.py` (`eval_metrics.csv`) bị notebook Vòng 2/3 gõ
+  nhầm thành `eval_metrics.txt`** khi đọc lại để so Score trước/sau — 2 file khác nhau
+  do 2 agent khác nhau viết (agent Round-1 viết `04_eval_metrics.py`, agent refine viết
+  `kaggle_round2_refine.ipynb`/`kaggle_round3_refine.ipynb`), không ai đối chiếu tên
+  file thật. Bài học: khi 1 file ĐỌC lại output của 1 file KHÁC do agent khác viết, PHẢI
+  đối chiếu tên file THẬT trong code nguồn (không suy đoán/gõ theo trí nhớ đuôi
+  `.txt`/`.csv`).
+- **Thiếu `git submodule update --init --recursive` sau `git checkout <commit pin>`** ở
+  `kaggle_submission.ipynb` (3 notebook kia đều có dòng này, đúng theo comment trong
+  `02_train_baseline.sh`, nhưng agent viết `kaggle_submission.ipynb` port từ 1 bản cũ
+  hơn chưa có dòng này). Bài học: khi có N notebook làm CÙNG 1 bước cài đặt (ở đây là
+  Bước 2 — clone + build gaussian-splatting), PHẢI đối chiếu cả N bản với nhau (diff),
+  không chỉ tự tin bản mình port đúng.
+
 ## 6. Triết lý test — áp dụng cho MỌI code mới ở repo này
 
 - Không có GPU cục bộ (Kaggle mới có GPU) — TOÀN BỘ phần train/render thật CHỈ verify

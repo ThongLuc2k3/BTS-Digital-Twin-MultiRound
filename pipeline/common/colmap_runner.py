@@ -8,7 +8,7 @@ src/pycolmap/pipeline/*.cc và src/pycolmap/scene/*.cc) để đảm bảo đún
 KHÔNG suy đoán từ trí nhớ.
 
 Phát hiện quan trọng khi soi dữ liệu thật (xem Dataset/README.md mục 4): sparse
-gốc của BTC cho scene HCM0249 dùng camera model SIMPLE_RADIAL (model_id=2, 4 tham
+gốc của BTC cho các scene BTS dùng camera model SIMPLE_RADIAL (model_id=2, 4 tham
 số f,cx,cy,k — giải mã trực tiếp từ cameras.bin, không suy đoán), khớp với việc
 mọi hàng test_poses.csv luôn có fx==fy (SIMPLE_RADIAL chỉ có 1 focal length dùng
 chung cho cả 2 trục). Vì vậy mặc định script này cũng dùng SIMPLE_RADIAL khi tự
@@ -123,7 +123,7 @@ def use_provided_sparse(images_dir: Path, sparse_dir: Path, workdir: Path,
                          log_path: Path | None = None) -> dict:
     """Dùng THẲNG sparse đã có sẵn (do BTC cung cấp) — KHÔNG tự chạy COLMAP.
 
-    Dataset có sparse/0/ hợp lệ ở cả 13/13 scene, nên bước feature extraction +
+    Dataset có sparse/0/ hợp lệ ở cả 7/7 scene, nên bước feature extraction +
     matching + incremental mapping (vốn tốn thời gian và dễ lỗi nhất) không còn
     cần thiết cho hầu hết trường hợp — chỉ còn bước undistort (rất nhanh, vài
     giây tới vài chục giây) để chuyển sang PINHOLE sạch trước khi đưa vào 3DGS.
