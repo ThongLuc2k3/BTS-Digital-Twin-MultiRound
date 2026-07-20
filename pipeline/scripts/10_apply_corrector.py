@@ -210,7 +210,10 @@ def main():
             corrected, gate_map = apply_tiled(model, img01, args.tile_size, args.tile_overlap, device,
                                                return_gate=True)
             gate_u8 = (gate_map[:, :, 0] * 255.0).round().astype(np.uint8)
-            PILImage.fromarray(gate_u8, mode="L").save(gate_dir / f"{stem}.png", format="PNG")
+            # KHÔNG truyền mode="L" — Pillow tự suy ra "L" đúng từ mảng 2D uint8, và
+            # tham số mode sẽ bị XOÁ HẲN ở Pillow 13 (2026-10-15, DeprecationWarning đã
+            # thấy khi chạy thật trên Kaggle).
+            PILImage.fromarray(gate_u8).save(gate_dir / f"{stem}.png", format="PNG")
             gate_means.append(float(gate_map.mean()))
         else:
             corrected = apply_tiled(model, img01, args.tile_size, args.tile_overlap, device)
