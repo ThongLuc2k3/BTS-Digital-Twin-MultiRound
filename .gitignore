@@ -7,6 +7,10 @@ pipeline/work/
 # Checkpoint tải thủ công từ Kaggle Output — nặng, lưu Drive, không lưu repo.
 checkpoints/
 
+# Checkpoint + dataset Round 1 CŨ (đã bị BTC huỷ, xem docs/MILESTONE_15_image_corrector.md)
+# dùng cục bộ để kiểm chứng Model 2 bằng dữ liệu thật — rất nặng (~1.5GB), không lưu repo.
+Round1/
+
 # Repo train/render 3DGS — clone lại mỗi lần chạy trên Kaggle, không lưu trong repo này.
 gaussian-splatting/
 

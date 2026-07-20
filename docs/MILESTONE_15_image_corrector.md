@@ -73,6 +73,33 @@ thử nghiệm song song.
   (partition of unity, kể cả ghép gate map), VÀ chạy THẬT (subprocess, CPU)
   `09_train_corrector.py` với dataset giả để xác nhận cơ chế resume/overwrite/gate-loss
   hoạt động đúng — không chỉ đọc code suy đoán.
+- `pipeline/kaggle_model2_validation_hcm0031.ipynb` — **notebook kiểm chứng riêng, KHÔNG
+  phải luồng nộp bài** (xem mục "Notebook kiểm chứng" bên dưới). Dùng checkpoint +
+  dataset scene `hcm0031` (Round 1 cũ, người dùng cung cấp) để render + tính Score THẬT
+  (PSNR/SSIM/LPIPS/Score đúng công thức BTC) TRƯỚC và SAU khi áp Model 2, so sánh trực
+  tiếp — trả lời đúng câu hỏi "Model 2 giúp tăng bao nhiêu điểm" bằng số liệu thật thay
+  vì chỉ QC bằng mắt.
+
+### Notebook kiểm chứng (`kaggle_model2_validation_hcm0031.ipynb`) — vì sao tách riêng
+
+Scene `hcm0031` KHÔNG thuộc registry `pipeline/common/scenes.py` (chỉ có 7 scene Round
+2) — cố tình KHÔNG đăng ký thêm vào đó để tránh nhầm lẫn với luồng nộp bài thật. Thay vào
+đó, notebook này **import `04_eval_metrics.py`/`08_build_corrector_dataset.py`/
+`09_train_corrector.py`/`10_apply_corrector.py` làm THƯ VIỆN** qua `importlib`
+(`spec_from_file_location` + `exec_module`, giống hệt kỹ thuật `tests/test_corrector_
+pipeline.py` đã dùng) — lấy đúng các hàm THUẦN (không phụ thuộc `Scene`/`get_scene()`):
+`build_minicam`/`load_train_poses`/`read_cfg_args` (từ 08), `CorrectorPatchDataset`
+(từ 09), `apply_tiled` (từ 10), `eval_scene`/`compute_score`/`print_stats` (từ 04 — dùng
+`SimpleNamespace(name="hcm0031")` thay `Scene` thật, vì `eval_scene()` chỉ đọc
+`scene.name` để in log, không cần object `Scene` đầy đủ). KHÔNG gọi `main()` của các
+script đó (tránh `get_scene("hcm0031")` raise lỗi) — tự viết vòng lặp orchestration
+(render, train, so Score) ngay trong notebook, tái dùng ĐÚNG logic đã test thay vì viết
+lại từ đầu.
+
+Đã dry-run CPU thật (không GPU) toàn bộ phần code KHÔNG cần GS_REPO/CUDA (Bước 6/8/9/10
+— tính Score, train loop, apply_tiled, so sánh) bằng dữ liệu giả — chạy sạch, không lỗi.
+Phần Bước 5/7 (render 3DGS thật qua GS_REPO) KHÔNG test được cục bộ (cần CUDA rasterizer
+thật) — CHƯA chạy thật, cần Kaggle.
 
 ### Vì sao KHÔNG dùng U-Net/pooling, KHÔNG BatchNorm
 
@@ -113,25 +140,73 @@ mỗi scene quá ít (vài trăm ảnh) để ước lượng batch statistics �
 
 ## Bước tiếp theo (bắt buộc trước khi dùng để nộp bài thật)
 
-0. **Đang chờ người dùng cung cấp vị trí checkpoint/kết quả Round 1 THẬT** đã có sẵn từ
-   1 lần chạy Kaggle trước đó (người dùng xác nhận đã có, chưa cho biết đường dẫn/link
-   Drive cụ thể) — dùng để test pipeline Model 2 này với dữ liệu thật thay vì phải train
-   Model 1 mới từ đầu. Cần xác nhận: (a) checkpoint đó train ở `MODE` nào ("final" =
-   100%, đúng khuyến nghị của nhánh này, hay "holdout" = 87.5%, vẫn dùng được nhưng
-   không đúng khuyến nghị), (b) đã tải đủ NGUYÊN thư mục `gs_model/` lên Drive (kèm
-   `cfg_args` + `pipeline_train_flags.json`, không chỉ riêng `.ply`) chưa.
-1. **Chạy thật trên Kaggle** (chưa làm được — không có GPU cục bộ): dùng checkpoint ở
-   mục 0 (hoặc train Model 1 `MODE="final"` mới nếu chưa có/không dùng được) → chạy hết
-   `kaggle_pixel_corrector.ipynb` → xem ảnh trước/gate-heatmap/sau Bước 12 bằng mắt thật.
-2. Nếu ảnh "sau" rõ ràng tốt hơn cho ít nhất vài scene: lặp lại cho 7 scene, đóng gói
-   thử `submission.zip` từ `pipeline/work_corrected`, đối chiếu dung lượng/định dạng
-   giống hệt kiểm tra đã làm trên `main` (`07_package_submission.py` không đổi nên logic
-   kiểm tra vẫn y hệt).
-3. Cân nhắc: giữ `main` (đã verify 11 pass) làm phương án nộp bài AN TOÀN mặc định; chỉ
-   thay bằng `work_corrected/` cho SCENE NÀO kiểm chứng bằng mắt thấy tốt hơn thật sự.
-4. KHÔNG merge nhánh này vào `main` cho tới khi có bằng chứng thị giác thật (không chỉ
-   suy đoán từ code) rằng Model 2 cải thiện chất lượng — nếu không cải thiện/tệ hơn, có
-   thể bỏ hẳn nhánh này mà không ảnh hưởng gì tới `main`.
+0. **[XONG — đã xác định]** Người dùng cung cấp checkpoint thật tại
+   `Round1/gs_model/` (local, KHÔNG commit — xem `.gitignore`) — nhưng đây là checkpoint
+   scene **`hcm0031`**, thuộc **dataset Round 1 CŨ đã bị BTC huỷ**
+   (`Dataset/VAI_NVS_DATA/phase1/public_set/`, 5 scene: `hcm0031, HCM0181, HCM0193,
+   HCM0204, hcm0034` — KHÁC HẲN 7 scene Round 2 hiện tại), KHÔNG phải checkpoint Round 2
+   thật. Đã xác nhận qua `cfg_args` (`source_path=".../work/hcm0031/..."`) + đối chiếu
+   `Dataset/VAI_NVS_DATA/phase1/public_set/hcm0031/`. Checkpoint hợp lệ (30000 iteration,
+   4.9 triệu Gaussian, `plyfile` đọc được, 62 property/vertex đúng sh_degree=3) — dùng để
+   **kiểm chứng** pipeline Model 2 bằng Score THẬT (dataset này CÓ ảnh GT test thật,
+   Round 2 thì KHÔNG), không dùng để nộp bài.
+1. **Chạy `kaggle_model2_validation_hcm0031.ipynb` trên Kaggle** (notebook mới, xem mục
+   "Notebook kiểm chứng" bên dưới) — chưa chạy được ở đây vì máy cục bộ có GPU (GTX 1650,
+   CUDA 12.8 qua WSL2) nhưng THIẾU `nvcc`/CUDA toolkit để build
+   `diff-gaussian-rasterization` + RAM quá thấp lúc kiểm tra (295MB trống) — người dùng
+   đã chọn KHÔNG cài CUDA toolkit cục bộ (rủi ro treo máy), nên phải chạy trên Kaggle.
+2. Sau khi có Score TRƯỚC/SAU thật từ notebook kiểm chứng (`hcm0031`): nếu Model 2 tăng
+   Score rõ ràng, đó là bằng chứng thật (không phải suy đoán) để tự tin áp dụng
+   `kaggle_pixel_corrector.ipynb` cho 7 scene Round 2 thật (train Model 1 `MODE="final"`
+   mới cho từng scene Round 2, vì checkpoint `hcm0031` KHÔNG dùng được cho Round 2). Nếu
+   Score KHÔNG tăng/giảm trên `hcm0031`, cân nhắc dừng nhánh này trước khi tốn công cho
+   cả 7 scene thật.
+3. Lặp lại `kaggle_pixel_corrector.ipynb` cho từng scene Round 2, đóng gói thử
+   `submission.zip` từ `pipeline/work_corrected`, đối chiếu dung lượng/định dạng giống
+   hệt kiểm tra đã làm trên `main` (`07_package_submission.py` không đổi nên logic kiểm
+   tra vẫn y hệt).
+4. Cân nhắc: giữ `main` (đã verify 11 pass) làm phương án nộp bài AN TOÀN mặc định; chỉ
+   thay bằng `work_corrected/` cho SCENE NÀO kiểm chứng thấy tốt hơn thật sự (bằng Score
+   nếu có thể, hoặc bằng mắt như thiết kế gốc).
+5. KHÔNG merge nhánh này vào `main` cho tới khi có bằng chứng thật (Score hoặc thị giác,
+   không chỉ suy đoán từ code) rằng Model 2 cải thiện chất lượng — nếu không cải thiện/tệ
+   hơn, có thể bỏ hẳn nhánh này mà không ảnh hưởng gì tới `main`.
+
+### 2026-07-20 — Notebook kiểm chứng bằng dữ liệu thật (`hcm0031`)
+
+- Người dùng cung cấp checkpoint thật tại `Round1/gs_model/` (local) — kiểm tra phát
+  hiện đây là scene `hcm0031` thuộc **dataset Round 1 CŨ đã bị BTC huỷ**
+  (`Dataset/VAI_NVS_DATA/phase1/public_set/`), KHÔNG phải 1 trong 7 scene Round 2. Xác
+  nhận qua `cfg_args` (`source_path` chứa `hcm0031`) đối chiếu với dataset local sẵn có.
+  Điểm hay: dataset Round 1 cũ này CÓ ảnh GT test thật (`test/images/`, 50 ảnh) — Round 2
+  KHÔNG có GT cho bất kỳ scene nào — nên đây là cơ hội DUY NHẤT hiện có để đo Score
+  khách quan thật (không phải ước lượng qua holdout tự tạo).
+- Phát hiện máy cục bộ CÓ GPU thật qua WSL2 (GTX 1650, driver CUDA 12.8) nhưng THIẾU
+  `nvcc` (CUDA toolkit) để build `diff-gaussian-rasterization`/`simple-knn`, và RAM lúc
+  đó chỉ còn 295MB trống, swap gần đầy — hỏi người dùng trước khi cài gì nặng (rủi ro
+  treo máy), người dùng chọn KHÔNG cài, chỉ kiểm tra nhẹ + chuẩn bị notebook chạy trên
+  Kaggle. Kiểm tra nhẹ cục bộ (không CUDA): cài `plyfile`, đọc `point_cloud.ply` xác nhận
+  4.948.598 Gaussian, 62 property/vertex (đúng sh_degree=3, không hỏng file); đọc
+  `cameras.json` (200 camera, khớp 200 ảnh train), `cfg_args` (baseline thuần, KHÔNG
+  antialiasing/depth/exposure đặc biệt — đối chiếu với notebook train gốc
+  `Round1/bts-digital-twin-public.ipynb` xác nhận không dùng cờ nào đặc biệt).
+- Viết `pipeline/kaggle_model2_validation_hcm0031.ipynb` (23 cell) — render pose test
+  bằng checkpoint thật → tính Score THẬT (trước) → render pose train → train Model 2 →
+  áp lên render test → tính Score THẬT (sau) → so sánh + hiển thị ảnh mẫu (trước/gate
+  heatmap/sau/GT). Tái dùng `04_eval_metrics.py`/`08_build_corrector_dataset.py`/
+  `09_train_corrector.py`/`10_apply_corrector.py` làm THƯ VIỆN qua `importlib` (không
+  gọi `main()`, tránh vướng `get_scene("hcm0031")` chưa đăng ký) — xem mục "Notebook
+  kiểm chứng" ở trên.
+- Dry-run CPU thật (không GPU, dữ liệu giả) toàn bộ phần code KHÔNG cần GS_REPO/CUDA
+  (Bước 6/8/9/10 của notebook) — chạy sạch, không lỗi, xác nhận glue code (viết trực
+  tiếp trong notebook, chưa từng chạy) không có bug cú pháp/API trước khi người dùng tốn
+  GPU Kaggle thật. Phần render 3DGS thật (Bước 5/7) CHƯA test được (cần CUDA thật).
+- Thêm `Round1/` vào `.gitignore` (checkpoint 1.2GB + dataset 280MB, không commit, giống
+  `checkpoints/` đã ignore trước đó). Chạy lại `tests/test_syntax_all.py` — 20/20 `.py` +
+  7/7 `.ipynb` PASS (bao gồm notebook mới) — không regression.
+- **CHƯA làm**: chạy thật `kaggle_model2_validation_hcm0031.ipynb` trên Kaggle (cần
+  người dùng điền 2 link Drive — checkpoint + dataset `hcm0031` — vào Bước 4) để có
+  Score TRƯỚC/SAU thật.
 
 ## Lịch sử
 
