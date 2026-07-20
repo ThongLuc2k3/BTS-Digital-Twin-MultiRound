@@ -19,7 +19,9 @@ Test bao gồm:
      cho gì — xác nhận đúng tính chất fully-convolutional), và tại lúc khởi tạo (tail
      conv zero-init CÓ CHỦ ĐÍCH) output == input y hệt (residual = 0) — xác nhận đúng
      thuộc tính "an toàn" đã thiết kế (corrector chưa train/train hỏng không tự sinh
-     nhiễu, chỉ trả về nguyên render Model 1).
+     nhiễu, chỉ trả về nguyên render Model 1). Nhánh gate (tự học vùng cần sửa, theo yêu
+     cầu người dùng): shape/range đúng, forward()==forward_with_gate()[0], và thuộc tính
+     an toàn vẫn giữ nguyên bất kể gate (gate*residual=0 khi residual=0).
   3. Checkpoint save/load round-trip (state_dict khớp lại đúng), và load_checkpoint()
      PHẢI báo lỗi rõ nếu kiến trúc (num_blocks/channels) không khớp model đang tạo.
   4. ssim(): ssim(x,x) ~= 1.0, khác ảnh thì < 1.0, sai shape phải raise.
@@ -28,10 +30,14 @@ Test bao gồm:
      bị bỏ sót/tính trùng — bài test coverage, KHÔNG chứng minh trộn biên mượt vì mọi
      tile trả về đúng giá trị gốc bất kể trọng số). Trộn biên mượt được test riêng bằng
      thuộc tính toán học của ramp_weight() (tổng trọng số 2 ô liền kề ~= 1 ở đúng vùng
-     chồng lấn danh nghĩa — partition of unity).
+     chồng lấn danh nghĩa — partition of unity). apply_tiled(return_gate=True) test riêng
+     bằng model giả có gate CỐ ĐỊNH — ghép ô lại phải ra đúng hằng số đó khắp ảnh (xác
+     nhận đường ống blend gate map dùng đúng cơ chế trộn với ảnh chính); model KHÔNG có
+     forward_with_gate() vẫn chạy được qua nhánh fallback (coi như gate=1 khắp nơi).
   6. 09_train_corrector.py chạy THẬT (subprocess, CPU, dataset giả rất nhỏ): train lần
-     đầu tạo checkpoint; chạy lại KHÔNG cờ phải bị chặn (exit != 0); --resume phải tăng
-     step lũy kế đúng; --overwrite phải reset về step nhỏ ban đầu (không cộng dồn).
+     đầu tạo checkpoint (loss_history có field gate_mean); chạy lại KHÔNG cờ phải bị chặn
+     (exit != 0); --resume phải tăng step lũy kế đúng; --gate_sparsity_weight nhận cờ
+     đúng; --overwrite phải reset về step nhỏ ban đầu (không cộng dồn).
   7. 08_build_corrector_dataset.py: guard thiếu biến môi trường GS_REPO báo lỗi rõ.
 """
 import importlib.util
@@ -115,6 +121,20 @@ def test_network_architecture():
     check("receptive_field_px tính đúng (1 + num_blocks*2)",
           model.receptive_field_px == 1 + 3 * 2)
 
+    # Nhánh gate (tự học vùng cần sửa) — xem docstring corrector_model.py.
+    x = torch.rand(2, 3, 40, 48)
+    with torch.no_grad():
+        out2, gate, residual = model.forward_with_gate(x)
+        out1 = model(x)
+    check("forward_with_gate: gate shape đúng (B,1,H,W)", tuple(gate.shape) == (2, 1, 40, 48))
+    check("forward_with_gate: residual shape đúng (B,3,H,W)", tuple(residual.shape) == tuple(x.shape))
+    check("forward_with_gate: gate trong [0,1] (sigmoid)",
+          bool((gate >= 0).all()) and bool((gate <= 1).all()))
+    check("forward() và forward_with_gate()[0] cho kết quả giống hệt nhau",
+          bool(torch.equal(out1, out2)))
+    check("tail_residual zero-init -> output == input bất kể gate là bao nhiêu (gate*0=0)",
+          bool(torch.allclose(out2, x, atol=1e-6)))
+
 
 def test_checkpoint_roundtrip():
     print("== 3. Checkpoint save/load ==")
@@ -168,6 +188,23 @@ class _IdentityModel(nn.Module):
         return x
 
 
+class _ConstantGateModel(nn.Module):
+    """Model giả có API forward_with_gate() — gate CỐ ĐỊNH (không phụ thuộc vị trí ô),
+    residual=0 (nên output=input, không lẫn ảnh hưởng của residual vào bài test gate)."""
+
+    def __init__(self, gate_value: float = 0.7):
+        super().__init__()
+        self.gate_value = gate_value
+
+    def forward_with_gate(self, x):
+        gate = torch.full((x.shape[0], 1, x.shape[2], x.shape[3]), self.gate_value, dtype=x.dtype)
+        residual = torch.zeros_like(x)
+        return x, gate, residual
+
+    def forward(self, x):
+        return self.forward_with_gate(x)[0]
+
+
 def test_tiled_reconstruction():
     print("== 5. Ghép ô (tiled inference), 10_apply_corrector.py ==")
     mod = load_module(SCRIPT_10, "apply_corrector_under_test")
@@ -201,6 +238,27 @@ def test_tiled_reconstruction():
     check("ramp_weight: tổng trọng số 2 ô liền kề ~= 1 ở đúng vùng chồng lấn danh nghĩa "
           "(partition of unity, trường hợp overlap chuẩn)",
           bool(np.allclose(sum_overlap, 1.0, atol=1e-6)), f"{sum_overlap}")
+
+    # return_gate=True: model có forward_with_gate() với gate CỐ ĐỊNH 0.7 -> ghép ô lại
+    # (weighted average của cùng 1 hằng số ở mọi ô) phải cho ra gate map ~= 0.7 khắp ảnh —
+    # xác nhận đường ống blend gate map dùng ĐÚNG cùng cơ chế trộn với ảnh chính, không bug
+    # riêng ở nhánh return_gate.
+    const_gate_model = _ConstantGateModel(gate_value=0.7)
+    corrected, gate_map = mod.apply_tiled(const_gate_model, img, tile_size=32, overlap=8,
+                                           device="cpu", return_gate=True)
+    check("apply_tiled(return_gate=True): ảnh chính vẫn đúng (residual=0 -> output=input)",
+          bool(np.allclose(corrected, img, atol=1e-5)))
+    check("apply_tiled(return_gate=True): gate map ghép lại đúng = hằng số 0.7 khắp ảnh",
+          bool(np.allclose(gate_map, 0.7, atol=1e-5)),
+          f"min={gate_map.min():.4f} max={gate_map.max():.4f}")
+
+    # Model KHÔNG có forward_with_gate() (như _IdentityModel) vẫn phải chạy được bình
+    # thường qua nhánh fallback (coi như gate=1 khắp nơi) — không bắt buộc mọi model
+    # truyền vào apply_tiled() phải có nhánh gate.
+    _corrected2, gate_fallback = mod.apply_tiled(identity, img, tile_size=32, overlap=8,
+                                                  device="cpu", return_gate=True)
+    check("apply_tiled(return_gate=True) với model KHÔNG có forward_with_gate -> fallback gate=1",
+          bool(np.allclose(gate_fallback, 1.0, atol=1e-5)))
 
 
 def _make_fake_corrector_dataset(dataset_dir: Path, n_pairs: int = 3, size: int = 48):
@@ -248,12 +306,20 @@ def test_train_resume_guard():
         check("chạy lại KHÔNG --resume/--overwrite phải bị chặn (exit != 0)", r2.returncode != 0)
 
         payload_before = torch.load(ckpt, map_location="cpu", weights_only=False)
+        check("loss_history có field gate_mean (nhánh gate tự học vùng cần sửa)",
+              bool(payload_before.get("loss_history")) and "gate_mean" in payload_before["loss_history"][-1],
+              str(payload_before.get("loss_history")))
+
         r3 = run_09(common_args + ["--steps", "5", "--resume"])
         check("--resume chạy thành công", r3.returncode == 0, (r3.stdout + r3.stderr)[-800:])
         payload_after = torch.load(ckpt, map_location="cpu", weights_only=False)
         check("--resume cộng dồn đúng step (base+5)",
               payload_after["step"] == payload_before["step"] + 5,
               f"{payload_before['step']} -> {payload_after['step']}")
+
+        r3b = run_09(common_args + ["--steps", "3", "--overwrite", "--gate_sparsity_weight", "0.05"])
+        check("--gate_sparsity_weight tuỳ chỉnh được nhận đúng cờ (chạy thành công)",
+              r3b.returncode == 0, (r3b.stdout + r3b.stderr)[-800:])
 
         r4 = run_09(common_args + ["--steps", "3", "--overwrite"])
         check("--overwrite chạy thành công", r4.returncode == 0, (r4.stdout + r4.stderr)[-800:])

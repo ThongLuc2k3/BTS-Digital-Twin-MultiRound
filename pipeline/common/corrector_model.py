@@ -26,11 +26,26 @@ pixel tuyệt đối trong bài toán phục hồi ảnh (image restoration) —
 xác nhận trong tài liệu tham khảo (vd EDSR bỏ hẳn BN so với SRResNet), càng đúng hơn khi
 dữ liệu train ở đây rất ít đa dạng batch (chỉ vài trăm ảnh/scene).
 
-Lớp tail (Conv2d cuối) được khởi tạo weight/bias = 0 — tại bước 0 (và nếu train bị cấu
-hình sai/lr quá lớn/dữ liệu hỏng), residual ~ 0 nên output ~ chính render gốc của Model 1
-— nghĩa là 1 corrector chưa train tốt sẽ "xuống cấp nhẹ nhàng" về đúng ảnh Model 1 gốc,
-KHÔNG BAO GIỜ tự sinh nhiễu/ảnh vỡ ngay từ đầu — cùng triết lý "không bao giờ âm thầm
-sai mà không báo" của toàn repo, ở đây thực hiện bằng kiến trúc thay vì bằng guard code.
+Lớp tail_residual (Conv2d cuối nhánh residual) được khởi tạo weight/bias = 0 — tại bước
+0 (và nếu train bị cấu hình sai/lr quá lớn/dữ liệu hỏng), residual ~ 0 nên output ~ chính
+render gốc của Model 1 — nghĩa là 1 corrector chưa train tốt sẽ "xuống cấp nhẹ nhàng" về
+đúng ảnh Model 1 gốc, KHÔNG BAO GIỜ tự sinh nhiễu/ảnh vỡ ngay từ đầu — cùng triết lý
+"không bao giờ âm thầm sai mà không báo" của toàn repo, ở đây thực hiện bằng kiến trúc
+thay vì bằng guard code. Thuộc tính này giữ nguyên dù có thêm nhánh gate bên dưới, vì
+`gate * 0 = 0` bất kể gate là bao nhiêu.
+
+NHÁNH GATE (bản đồ độ tin cậy/mức sửa, tự học — theo yêu cầu người dùng: "Model 2 phải
+tự suy luận vùng cần sửa" thay vì sửa đều toàn ảnh): thêm 1 đầu ra phụ `tail_gate` (1
+kênh, qua sigmoid -> [0,1]) dùng làm HỆ SỐ NHÂN lên residual trước khi cộng vào input:
+`output = clamp(input + gate * residual, 0, 1)`. Mạng KHÔNG được giám sát trực tiếp
+gate (không có "nhãn vùng nhiễu" nào ở test time — làm gì có GT để biết trước) — gate tự
+nổi lên hoàn toàn từ việc tối ưu loss tái tạo (L1/SSIM) kết hợp 1 số hạng phạt thưa nhẹ
+trên gate (xem `--gate_sparsity_weight` ở `09_train_corrector.py`): mạng chỉ "được lợi"
+khi bật gate=1 ở đúng vùng mà residual thực sự giúp giảm loss nhiều hơn cái giá phải trả
+của số hạng phạt — tự nhiên học ra "chỉ sửa vùng cần sửa" mà không cần bất kỳ nhãn/mask
+thủ công nào. `forward()` (dùng ở suy luận thường) chỉ trả về ảnh đã sửa; dùng
+`forward_with_gate()` khi cần cả gate map (lúc train để tính phạt thưa, hoặc lúc suy
+luận muốn xuất heatmap QC bằng mắt — xem `10_apply_corrector.py`).
 """
 from __future__ import annotations
 
@@ -58,7 +73,8 @@ class _ResBlock(nn.Module):
 class ResidualCorrectorNet(nn.Module):
     """input/output: (B,3,H,W) float32 trong [0,1]. H,W BẤT KỲ (fully-convolutional).
 
-    output = clamp(input + tail(resblocks(stem(input))), 0, 1)
+    output = clamp(input + gate * residual, 0, 1), với gate,residual đều suy ra từ
+    cùng 1 trunk feature (stem + num_blocks resblock) — xem `forward_with_gate()`.
     """
 
     def __init__(self, num_blocks: int = 6, channels: int = 64) -> None:
@@ -68,18 +84,35 @@ class ResidualCorrectorNet(nn.Module):
         self.stem = nn.Conv2d(3, channels, kernel_size=3, padding=1)
         self.stem_act = nn.ReLU(inplace=True)
         self.blocks = nn.ModuleList([_ResBlock(channels) for _ in range(num_blocks)])
-        self.tail = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
+        self.tail_residual = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
+        self.tail_gate = nn.Conv2d(channels, 1, kernel_size=3, padding=1)
         # Khởi tạo 0 CÓ CHỦ ĐÍCH (xem docstring đầu file) — KHÔNG phải khởi tạo mặc định
-        # của PyTorch (Kaiming uniform khác 0), phải set tay sau khi tạo layer.
-        nn.init.zeros_(self.tail.weight)
-        nn.init.zeros_(self.tail.bias)
+        # của PyTorch (Kaiming uniform khác 0), phải set tay sau khi tạo layer. Chỉ cần
+        # zero-init tail_residual để đảm bảo an toàn lúc khởi tạo (gate*0=0 bất kể gate
+        # bằng bao nhiêu) — tail_gate giữ khởi tạo mặc định của PyTorch, không cần ép 0.
+        nn.init.zeros_(self.tail_residual.weight)
+        nn.init.zeros_(self.tail_residual.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _features(self, x: torch.Tensor) -> torch.Tensor:
         feat = self.stem_act(self.stem(x))
         for block in self.blocks:
             feat = block(feat)
-        residual = self.tail(feat)
-        return torch.clamp(x + residual, 0.0, 1.0)
+        return feat
+
+    def forward_with_gate(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Trả về (output, gate, residual) — dùng lúc train (tính phạt thưa lên gate,
+        xem `09_train_corrector.py`) hoặc lúc suy luận muốn xuất heatmap QC (xem
+        `10_apply_corrector.py`). gate: (B,1,H,W) trong [0,1] (sigmoid) — 1 = "tin cậy
+        cao, sửa mạnh", 0 = "để nguyên render gốc"."""
+        feat = self._features(x)
+        residual = self.tail_residual(feat)
+        gate = torch.sigmoid(self.tail_gate(feat))
+        output = torch.clamp(x + gate * residual, 0.0, 1.0)
+        return output, gate, residual
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output, _gate, _residual = self.forward_with_gate(x)
+        return output
 
     @property
     def receptive_field_px(self) -> int:

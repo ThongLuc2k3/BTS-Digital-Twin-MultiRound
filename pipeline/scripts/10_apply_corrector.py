@@ -16,6 +16,8 @@ Cách dùng:
 Input:  pipeline/work/<scene>/renders/<stem>.png       (output CÓ SẴN của 03_render_test_poses.py)
         pipeline/work/<scene>/corrector_model/corrector.pt  (checkpoint Model 2, nếu có)
 Output: pipeline/work_corrected/<scene>/renders/<stem>.png
+        pipeline/work_corrected/<scene>/gate_maps/<stem>.png   (heatmap gate — TRẮNG = Model 2
+            tự chọn sửa mạnh, ĐEN = gần như giữ nguyên render gốc; --no_save_gate_map để tắt)
         pipeline/work_corrected/<scene>/10_apply_corrector.log
 
 Đóng gói submission từ đây: dùng
@@ -70,33 +72,54 @@ def ramp_weight(length: int, overlap: int, has_prev: bool, has_next: bool) -> np
     return w
 
 
-def apply_tiled(model, img01: np.ndarray, tile_size: int, overlap: int, device: str) -> np.ndarray:
-    """img01: (H,W,3) float32 [0,1]. Trả về ảnh đã sửa, cùng shape."""
+def apply_tiled(model, img01: np.ndarray, tile_size: int, overlap: int, device: str,
+                 return_gate: bool = False):
+    """img01: (H,W,3) float32 [0,1]. Trả về ảnh đã sửa, cùng shape.
+
+    Nếu `return_gate=True`, trả về thêm (H,W,1) gate map đã ghép/trộn y hệt cách ghép
+    ảnh chính — dùng để xuất heatmap QC bằng mắt (xem `main()`), cho thấy Model 2 TỰ
+    CHỌN sửa mạnh (gate~1) ở vùng nào, gần như không sửa (gate~0) ở vùng nào (đúng yêu
+    cầu "tự suy luận vùng cần sửa" thay vì sửa đều toàn ảnh — xem `corrector_model.py`).
+    Model không có `forward_with_gate` (vd model giả dùng trong test) sẽ được coi như
+    "luôn sửa" (gate=1 khắp nơi) để tương thích ngược, không bắt buộc mọi model truyền
+    vào đây phải có nhánh gate."""
     H, W, _ = img01.shape
     th, tw = min(tile_size, H), min(tile_size, W)
     y_starts = compute_tile_starts(H, th, overlap)
     x_starts = compute_tile_starts(W, tw, overlap)
 
     acc = np.zeros((H, W, 3), dtype=np.float32)
+    gate_acc = np.zeros((H, W, 1), dtype=np.float32)
     wsum = np.zeros((H, W, 1), dtype=np.float32)
+    has_gate_api = hasattr(model, "forward_with_gate")
 
     with torch.no_grad():
         for yi, y0 in enumerate(y_starts):
             for xi, x0 in enumerate(x_starts):
                 tile = img01[y0:y0 + th, x0:x0 + tw]
                 t = torch.from_numpy(tile).permute(2, 0, 1).unsqueeze(0).to(device)
-                out = model(t).squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
+                if has_gate_api:
+                    out_t, gate_t, _residual_t = model.forward_with_gate(t)
+                else:
+                    out_t = model(t)
+                    gate_t = torch.ones_like(out_t[:, :1])
+                out = out_t.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
+                gate_np = gate_t.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
 
                 wy = ramp_weight(th, overlap, has_prev=yi > 0, has_next=yi < len(y_starts) - 1)
                 wx = ramp_weight(tw, overlap, has_prev=xi > 0, has_next=xi < len(x_starts) - 1)
                 w2d = (wy[:, None] * wx[None, :])[:, :, None]
 
                 acc[y0:y0 + th, x0:x0 + tw] += out * w2d
+                gate_acc[y0:y0 + th, x0:x0 + tw] += gate_np * w2d
                 wsum[y0:y0 + th, x0:x0 + tw] += w2d
 
     if np.any(wsum <= 0):
         raise RuntimeError("apply_tiled: có pixel không được ô nào phủ tới — lỗi logic ghép ô.")
-    return np.clip(acc / wsum, 0.0, 1.0)
+    corrected = np.clip(acc / wsum, 0.0, 1.0)
+    if return_gate:
+        return corrected, np.clip(gate_acc / wsum, 0.0, 1.0)
+    return corrected
 
 
 def main():
@@ -110,6 +133,10 @@ def main():
     ap.add_argument("--tile_overlap", type=int, default=32)
     ap.add_argument("--strict", action="store_true",
                      help="Báo lỗi cứng nếu thiếu checkpoint corrector, thay vì copy-through render gốc.")
+    ap.add_argument("--save_gate_map", dest="save_gate_map", action="store_true", default=True,
+                     help="Lưu thêm heatmap gate (vùng Model 2 TỰ CHỌN sửa mạnh/nhẹ) để QC bằng mắt "
+                          "(mặc định BẬT — chi phí rẻ, xem Bước 12 kaggle_pixel_corrector.ipynb).")
+    ap.add_argument("--no_save_gate_map", dest="save_gate_map", action="store_false")
     args = ap.parse_args()
 
     scene = get_scene(args.scene)
@@ -120,6 +147,7 @@ def main():
     renders_in_dir = Path(args.renders_in_dir) if args.renders_in_dir else pipeline_root / "work" / scene.name / "renders"
     out_dir = Path(args.out_dir) if args.out_dir else pipeline_root / "work_corrected" / scene.name / "renders"
     out_dir.mkdir(parents=True, exist_ok=True)
+    gate_dir = out_dir.parent / "gate_maps"
     log = FileLog(out_dir.parent / "10_apply_corrector.log")
 
     if not renders_in_dir.exists():
@@ -159,9 +187,12 @@ def main():
               f"--tile_overlap >= {model.receptive_field_px}.")
 
     log.write(f"scene={scene.name} checkpoint={ckpt_path} step={payload.get('step')} "
-              f"tile_size={args.tile_size} tile_overlap={args.tile_overlap}")
+              f"tile_size={args.tile_size} tile_overlap={args.tile_overlap} save_gate_map={args.save_gate_map}")
+    if args.save_gate_map:
+        gate_dir.mkdir(parents=True, exist_ok=True)
 
     n_done = 0
+    gate_means = []
     for stem, (exp_w, exp_h) in sorted(expected.items()):
         src = renders_in_dir / f"{stem}.png"
         if not src.exists():
@@ -175,7 +206,15 @@ def main():
                 )
             img01 = np.asarray(im, dtype=np.float32) / 255.0
 
-        corrected = apply_tiled(model, img01, args.tile_size, args.tile_overlap, device)
+        if args.save_gate_map:
+            corrected, gate_map = apply_tiled(model, img01, args.tile_size, args.tile_overlap, device,
+                                               return_gate=True)
+            gate_u8 = (gate_map[:, :, 0] * 255.0).round().astype(np.uint8)
+            PILImage.fromarray(gate_u8, mode="L").save(gate_dir / f"{stem}.png", format="PNG")
+            gate_means.append(float(gate_map.mean()))
+        else:
+            corrected = apply_tiled(model, img01, args.tile_size, args.tile_overlap, device)
+
         out_u8 = (corrected * 255.0).round().astype(np.uint8)
         out_im = PILImage.fromarray(out_u8)
         if out_im.size != (exp_w, exp_h):
@@ -190,6 +229,9 @@ def main():
     log.write(f"Xong. {n_done} ảnh đã sửa tại {out_dir}")
     log.close()
     print(f"-> Xong {n_done} ảnh (đã sửa bằng Model 2) tại {out_dir}")
+    if args.save_gate_map and gate_means:
+        print(f"-> gate_mean trung bình toàn scene: {sum(gate_means) / len(gate_means):.4f} "
+              f"(heatmap từng ảnh tại {gate_dir}, trắng = sửa mạnh, đen = gần như không sửa)")
     print(f"-> Đóng gói: python 07_package_submission.py --renders_root {out_dir.parent.parent} --out submission.zip")
 
 

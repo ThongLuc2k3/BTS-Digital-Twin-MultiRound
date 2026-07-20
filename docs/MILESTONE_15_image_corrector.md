@@ -7,8 +7,9 @@
 
 ## Trạng thái hiện tại
 
-**HOÀN TẤT phần code + test cục bộ (không GPU).** Chưa chạy thật trên Kaggle (cần GPU
-+ dataset thật — xem "Bước tiếp theo").
+**HOÀN TẤT phần code + test cục bộ (không GPU), kể cả nhánh gate (tự học vùng cần sửa).**
+Chưa chạy thật trên Kaggle (cần GPU + dataset thật — xem "Bước tiếp theo"). Đang chờ
+người dùng cung cấp vị trí checkpoint Round 1 thật đã có sẵn (xem "Bước tiếp theo" mục 0).
 
 ## Bối cảnh — vì sao có nhánh này
 
@@ -34,8 +35,18 @@ thử nghiệm song song.
 ### File mới (strictly additive — không sửa file nào đã có trên `main`)
 
 - `pipeline/common/corrector_model.py` — `ResidualCorrectorNet` (fully-convolutional,
-  KHÔNG pooling, residual predict-and-add, tail conv khởi tạo 0 để an toàn khi
+  KHÔNG pooling, residual predict-and-add, tail_residual khởi tạo 0 để an toàn khi
   chưa/train hỏng), SSIM khả vi thuần `torch`, `save_checkpoint()`/`load_checkpoint()`.
+  **Nhánh gate** (cập nhật 2026-07-20, theo yêu cầu người dùng "Model 2 phải tự suy luận
+  vùng cần sửa"): thêm đầu ra phụ `tail_gate` (qua sigmoid, [0,1]) làm hệ số nhân lên
+  residual — `output = clamp(input + gate*residual, 0, 1)`. Gate KHÔNG được giám sát
+  trực tiếp (không có nhãn "vùng nhiễu" nào ở test time) — tự nổi lên từ việc tối ưu
+  loss tái tạo cộng 1 số hạng phạt thưa nhẹ `mean(gate)` (`--gate_sparsity_weight`, mặc
+  định 0.01, xem `09_train_corrector.py`): không có phạt này, gate=1 khắp ảnh cũng tối
+  ưu loss tái tạo ngang/tốt hơn, mạng sẽ không tự học khoanh vùng dù thừa khả năng biểu
+  diễn. `forward()` trả về ảnh đã sửa; `forward_with_gate()` trả về thêm (gate,
+  residual) — dùng lúc train (tính phạt) và lúc suy luận (xuất heatmap QC, xem
+  `10_apply_corrector.py`).
 - `pipeline/scripts/08_build_corrector_dataset.py` — render toàn bộ pose train bằng
   checkpoint Model 1, lưu cặp `(render, GT)` ra `pipeline/work/<scene>/corrector_dataset/`
   (tự đủ, không phụ thuộc `colmap/dense/images/` còn tồn tại hay không). Cần GS_REPO +
@@ -49,14 +60,19 @@ thử nghiệm song song.
   `03_render_test_poses.py`, KHÔNG sửa script đó) bằng suy luận kiểu tiled (cắt ô, chạy
   mạng từng ô, ghép lại có trộn mượt biên) để tránh OOM ảnh lớn. Ghi ra
   `pipeline/work_corrected/<scene>/renders/` — đúng layout `07_package_submission.py`
-  đã hỗ trợ sẵn qua `--renders_root` (KHÔNG sửa script đó).
+  đã hỗ trợ sẵn qua `--renders_root` (KHÔNG sửa script đó). Mặc định (`--save_gate_map`,
+  bật sẵn) còn xuất thêm heatmap gate `pipeline/work_corrected/<scene>/gate_maps/` —
+  TRẮNG = Model 2 tự tin sửa mạnh, ĐEN = gần như giữ nguyên render gốc — cho phép người
+  dùng KIỂM TRA BẰNG MẮT vùng mà mạng tự chọn xử lý (đúng ý người dùng: "chỉ cần kiểm
+  tra vùng kết quả render nhiễu để xử lý"), không phải hộp đen hoàn toàn.
 - `pipeline/kaggle_pixel_corrector.ipynb` — notebook Kaggle mới, dùng lại nguyên vẹn
   `kaggle_round1_baseline.ipynb` để train Model 1 (khuyến nghị `MODE="final"`), rồi mới
-  chạy các bước Model 2 (8→9→10→11→12 QC bằng mắt→13 lưu Drive).
-- `tests/test_corrector_pipeline.py` — 32 test cục bộ (không GPU): kiến trúc mạng, an
-  toàn zero-init, checkpoint round-trip, SSIM, toán học ghép ô (partition of unity),
-  VÀ chạy THẬT (subprocess, CPU) `09_train_corrector.py` với dataset giả để xác nhận cơ
-  chế resume/overwrite hoạt động đúng — không chỉ đọc code suy đoán.
+  chạy các bước Model 2 (8→9→10→11→12 QC bằng mắt: trước/gate heatmap/sau→13 lưu Drive).
+- `tests/test_corrector_pipeline.py` — 42 test cục bộ (không GPU): kiến trúc mạng (kể cả
+  nhánh gate — shape/range/an toàn), checkpoint round-trip, SSIM, toán học ghép ô
+  (partition of unity, kể cả ghép gate map), VÀ chạy THẬT (subprocess, CPU)
+  `09_train_corrector.py` với dataset giả để xác nhận cơ chế resume/overwrite/gate-loss
+  hoạt động đúng — không chỉ đọc code suy đoán.
 
 ### Vì sao KHÔNG dùng U-Net/pooling, KHÔNG BatchNorm
 
@@ -89,12 +105,24 @@ mỗi scene quá ít (vài trăm ảnh) để ước lượng batch statistics �
 4. Ngân sách thời gian: sinh dataset (Bước 8) ~ ngang `03_render_test_poses.py` (vài
    phút/scene). Train Model 2 (~0.5M tham số, patch 256px, vài nghìn bước) là vài phút,
    không đáng kể so với train Model 1 (15-30 nghìn iteration).
+5. **`--gate_sparsity_weight` cần tinh chỉnh bằng mắt, không có giá trị "đúng" cố định.**
+   Quá cao -> mạng "sợ" bật gate, gần như không sửa gì (heatmap Bước 12 toàn đen, ảnh
+   "sau" gần như y hệt "trước"). Quá thấp/0 -> mất tác dụng khoanh vùng, gate~1 khắp ảnh
+   (heatmap toàn trắng, quay lại đúng như bản KHÔNG có gate). Xem heatmap Bước 12 trước
+   khi quyết định giữ nguyên mặc định (0.01) hay chỉnh lại.
 
 ## Bước tiếp theo (bắt buộc trước khi dùng để nộp bài thật)
 
-1. **Chạy thật trên Kaggle** (chưa làm được — không có GPU cục bộ): train Model 1
-   `MODE="final"` 1 scene nhẹ (chair/bonsai) → chạy hết `kaggle_pixel_corrector.ipynb`
-   → xem ảnh trước/sau Bước 12 bằng mắt thật.
+0. **Đang chờ người dùng cung cấp vị trí checkpoint/kết quả Round 1 THẬT** đã có sẵn từ
+   1 lần chạy Kaggle trước đó (người dùng xác nhận đã có, chưa cho biết đường dẫn/link
+   Drive cụ thể) — dùng để test pipeline Model 2 này với dữ liệu thật thay vì phải train
+   Model 1 mới từ đầu. Cần xác nhận: (a) checkpoint đó train ở `MODE` nào ("final" =
+   100%, đúng khuyến nghị của nhánh này, hay "holdout" = 87.5%, vẫn dùng được nhưng
+   không đúng khuyến nghị), (b) đã tải đủ NGUYÊN thư mục `gs_model/` lên Drive (kèm
+   `cfg_args` + `pipeline_train_flags.json`, không chỉ riêng `.ply`) chưa.
+1. **Chạy thật trên Kaggle** (chưa làm được — không có GPU cục bộ): dùng checkpoint ở
+   mục 0 (hoặc train Model 1 `MODE="final"` mới nếu chưa có/không dùng được) → chạy hết
+   `kaggle_pixel_corrector.ipynb` → xem ảnh trước/gate-heatmap/sau Bước 12 bằng mắt thật.
 2. Nếu ảnh "sau" rõ ràng tốt hơn cho ít nhất vài scene: lặp lại cho 7 scene, đóng gói
    thử `submission.zip` từ `pipeline/work_corrected`, đối chiếu dung lượng/định dạng
    giống hệt kiểm tra đã làm trên `main` (`07_package_submission.py` không đổi nên logic
@@ -130,3 +158,32 @@ mỗi scene quá ít (vài trăm ảnh) để ước lượng batch statistics �
 - **CHƯA test được** (cần GPU + GS_REPO thật, ghi rõ để không ai quên): chức năng thật
   của `08_build_corrector_dataset.py` (render + lưu cặp ảnh đúng), và toàn bộ pipeline
   chạy thật trên Kaggle — xem "Bước tiếp theo".
+
+### 2026-07-20 — Thêm nhánh gate (tự học vùng cần sửa)
+
+- Người dùng làm rõ qua 2 câu hỏi: (a) "tự suy luận/kiểm tra vùng nhiễu" nghĩa là Model 2
+  phải TỰ HỌC dự đoán vùng cần sửa (thêm nhánh confidence/gate map trong kiến trúc, học
+  cùng lúc với train, KHÔNG phải heuristic cổ điển cố định), (b) người dùng ĐÃ CÓ
+  checkpoint/kết quả thật từ 1 lần chạy `kaggle_round1_baseline.ipynb` trên Kaggle trước
+  đó (chưa cung cấp vị trí cụ thể — xem "Bước tiếp theo" mục 0).
+- Sửa `ResidualCorrectorNet`: thêm `tail_gate` (sigmoid, 1 kênh) làm hệ số nhân lên
+  residual, `forward_with_gate()` trả về (output, gate, residual). Thuộc tính an toàn
+  (zero-init -> output=input) giữ nguyên vì chỉ phụ thuộc `tail_residual` zero-init,
+  không phụ thuộc gate.
+- Sửa `09_train_corrector.py`: thêm `--gate_sparsity_weight` (mặc định 0.01), loss =
+  recon_loss + weight*mean(gate) — cơ chế DUY NHẤT khiến gate tự học khoanh vùng (không
+  có phạt này, gate=1 khắp ảnh cũng tối ưu loss ngang/tốt hơn). `loss_history` giờ có
+  thêm field `gate_mean` để theo dõi qua các lần train.
+- Sửa `10_apply_corrector.py`: `apply_tiled()` nhận `return_gate=True`, ghép/trộn gate
+  map bằng ĐÚNG cơ chế trộn ảnh chính (dùng chung `ramp_weight`). Model không có
+  `forward_with_gate` (tương thích ngược, vd model test) tự coi như gate=1. Thêm
+  `--save_gate_map` (mặc định BẬT) xuất heatmap PNG grayscale ra `gate_maps/`.
+- Sửa notebook Bước 12: hiển thị 3 cột trước/gate-heatmap/sau thay vì 2 cột.
+- Thêm 10 test mới (32 -> 42 test), chạy thật (không chỉ đọc code): shape/range nhánh
+  gate, thuộc tính an toàn giữ nguyên, ghép ô gate map bằng model giả gate cố định (xác
+  nhận blend đúng cơ chế), model không có gate API vẫn chạy được (fallback), subprocess
+  thật xác nhận `loss_history` có `gate_mean` và `--gate_sparsity_weight` được nhận cờ
+  đúng. Toàn bộ 42/42 PASS + `test_syntax_all.py`/`test_07_package_submission.py` vẫn
+  xanh (không regression).
+- **CHƯA làm** (cần input từ người dùng): xác nhận vị trí checkpoint Round 1 thật để test
+  bằng dữ liệu thật thay vì dataset giả cục bộ — xem "Bước tiếp theo" mục 0.

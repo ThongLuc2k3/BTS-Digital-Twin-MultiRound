@@ -4,6 +4,12 @@ mạng sửa lỗi pixel 2D, HOÀN TOÀN RIÊNG BIỆT với Model 1 (3D Gaussia
 cần `torch` thuần (KHÔNG cần GS_REPO/CUDA rasterizer/COLMAP nữa) — đọc cặp (render, GT)
 đã cache sẵn bởi `08_build_corrector_dataset.py`.
 
+Model 2 TỰ HỌC vùng cần sửa (nhánh "gate" trong `ResidualCorrectorNet.forward_with_gate()`)
+thay vì sửa đều toàn ảnh — không cần nhãn/mask vùng lỗi nào (không có ở test time), chỉ
+cần phạt thưa nhẹ lên `mean(gate)` (`--gate_sparsity_weight`) cộng vào loss tái tạo, để
+mạng chỉ "được lợi" khi bật sửa mạnh (gate~1) ở đúng vùng residual thực sự giúp giảm
+loss. Xem docstring nhánh gate ở `pipeline/common/corrector_model.py` để hiểu đầy đủ.
+
 KHÔNG có holdout/validation set khách quan (quyết định có chủ đích của người dùng repo
 này — xem `docs/MILESTONE_15_image_corrector.md` mục rủi ro): mọi cặp (render, GT) đều
 dùng để train. Muốn kiểm tra chất lượng, chỉ có thể xem bằng mắt ảnh sau khi áp
@@ -113,6 +119,11 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--loss", choices=["l1", "l1_ssim"], default="l1")
     ap.add_argument("--ssim_weight", type=float, default=0.2, help="Chỉ dùng nếu --loss l1_ssim")
+    ap.add_argument("--gate_sparsity_weight", type=float, default=0.01,
+                     help="Trọng số phạt thưa lên gate map (mean(gate)) — buộc mạng TỰ HỌC chỉ bật "
+                          "gate=1 (sửa mạnh) ở vùng thực sự cần, thay vì sửa đều toàn ảnh (gate=1 khắp "
+                          "nơi cũng làm giảm loss tái tạo nếu không bị phạt). 0 = tắt phạt (mạng có thể "
+                          "tự do sửa toàn ảnh nếu thấy có lợi cho loss).")
     ap.add_argument("--num_blocks", type=int, default=6)
     ap.add_argument("--channels", type=int, default=64)
     ap.add_argument("--num_workers", type=int, default=2)
@@ -211,13 +222,20 @@ def main():
         render_batch = render_batch.to(device)
         gt_batch = gt_batch.to(device)
 
-        output = model(render_batch)
+        output, gate, _residual = model.forward_with_gate(render_batch)
         l1 = l1_loss_fn(output, gt_batch)
         if args.loss == "l1_ssim":
             ssim_val = ssim(output, gt_batch)
-            loss = (1.0 - args.ssim_weight) * l1 + args.ssim_weight * (1.0 - ssim_val)
+            recon_loss = (1.0 - args.ssim_weight) * l1 + args.ssim_weight * (1.0 - ssim_val)
         else:
-            loss = l1
+            recon_loss = l1
+        gate_mean = gate.mean()
+        # Phạt thưa CÓ CHỦ ĐÍCH lên gate — không có phạt này, gate=1 khắp ảnh cũng tối
+        # ưu recon_loss ngang hoặc tốt hơn (không có gì "phạt" việc sửa lan tràn), mạng
+        # sẽ không tự học ra khoanh vùng dù thừa khả năng biểu diễn. Đây là cơ chế DUY
+        # NHẤT khiến mạng "tự suy luận vùng cần sửa" thay vì sửa đều toàn ảnh — xem
+        # docstring nhánh gate ở corrector_model.py.
+        loss = recon_loss + args.gate_sparsity_weight * gate_mean
 
         optimizer.zero_grad()
         loss.backward()
@@ -225,9 +243,11 @@ def main():
         step += 1
 
         if step % args.log_every == 0 or step == target_step:
-            entry = {"step": step, "loss": float(loss.item()), "l1": float(l1.item())}
+            entry = {"step": step, "loss": float(loss.item()), "l1": float(l1.item()),
+                     "gate_mean": float(gate_mean.item())}
             loss_history.append(entry)
-            msg = f"[{step}/{target_step}] loss={loss.item():.5f} l1={l1.item():.5f}"
+            msg = (f"[{step}/{target_step}] loss={loss.item():.5f} l1={l1.item():.5f} "
+                   f"gate_mean={gate_mean.item():.4f}")
             print(f"  {msg}")
             log.write(msg)
 
@@ -236,6 +256,7 @@ def main():
                 ckpt_path, model, optimizer, step,
                 train_args={"patch_size": args.patch_size, "batch_size": args.batch_size, "lr": args.lr,
                             "loss": args.loss, "ssim_weight": args.ssim_weight,
+                            "gate_sparsity_weight": args.gate_sparsity_weight,
                             "num_blocks": args.num_blocks, "channels": args.channels, "seed": args.seed},
                 dataset_source_iteration=dataset_source_iteration,
                 loss_history=loss_history,
