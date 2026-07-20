@@ -82,6 +82,16 @@ from gaussian_renderer import render                             # noqa: E402
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix  # noqa: E402
 
 _ERROR_MASK_SCALE = 1000.0  # PHẢI khớp _ERROR_MASK_SCALE trong apply_error_refine_patch.py
+# Trần weight tối đa mà mask 16-bit PNG (pixel = round(weight * _ERROR_MASK_SCALE)) có thể
+# biểu diễn được KHÔNG TRÀN SỐ: uint16 max = 65535 -> weight max = 65535/1000 = 65.535. Vượt
+# ngưỡng này, np.round(weight * scale).astype(np.uint16) TRÀN SỐ (wrap-around modulo 65536)
+# ÂM THẦM — đã verify bằng thực thi thật (không suy đoán): --max_weight=70 -> ghi uint16=4464
+# -> đọc lại (PIL, đúng cách apply_error_refine_patch.py đọc) ra weight=4.464 (THẤP HƠN NHIỀU
+# giá trị 70 yêu cầu, không phải lỗi/crash gì cả — chỉ âm thầm sai số); --max_weight=65.536
+# (chỉ nhích hơn trần 0.001) -> uint16=0 -> weight giải mã = 0.0 (NGƯỢC HẲN ý đồ "ưu tiên cao
+# nhất" thành "trọng số thấp nhất có thể"). --max_weight=1.0 (không boost gì) vẫn là no-op
+# đúng (weight=1.0 mọi nơi, không liên quan trần này).
+_ERROR_MASK_MAX_WEIGHT = 65535.0 / _ERROR_MASK_SCALE  # = 65.535
 
 
 class _PipelineParamsStub:
@@ -194,6 +204,22 @@ def main():
 
     if args.error_percentile_hi <= args.error_percentile_lo:
         raise SystemExit("--error_percentile_hi phải > --error_percentile_lo")
+    if args.max_weight > _ERROR_MASK_MAX_WEIGHT:
+        raise SystemExit(
+            f"--max_weight={args.max_weight} vượt trần {_ERROR_MASK_MAX_WEIGHT:.3f} mà định dạng "
+            f"mask 16-bit PNG có thể biểu diễn được (pixel = round(weight * {_ERROR_MASK_SCALE:.0f}), "
+            "uint16 tối đa 65535) — giá trị lớn hơn sẽ TRÀN SỐ (wrap-around) và ÂM THẦM sinh ra "
+            "trọng số SAI/không đơn điệu (thậm chí THẤP hơn nhiều so với yêu cầu, hoặc về 0 — "
+            "ngược hẳn ý đồ 'ưu tiên vùng lỗi cao') khi đọc lại mask lúc train, KHÔNG có lỗi/crash "
+            f"nào báo khác. Dùng --max_weight <= {_ERROR_MASK_MAX_WEIGHT:.3f}."
+        )
+    if args.max_weight < 1.0:
+        raise SystemExit(
+            f"--max_weight={args.max_weight} < 1.0 không hợp lệ — công thức "
+            "weight = 1 + (max_weight-1)*clip(...) giả định max_weight >= 1.0 (1.0 = không đổi "
+            "trọng số, không boost vùng lỗi cao; < 1.0 sẽ làm GIẢM trọng số đúng ở vùng lỗi cao "
+            "nhất, ngược ý đồ thiết kế)."
+        )
 
     scene = get_scene(args.scene)
     pipeline_root = Path(__file__).resolve().parents[1]
