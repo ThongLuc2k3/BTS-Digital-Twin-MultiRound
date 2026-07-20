@@ -7,9 +7,10 @@
 
 ## Trạng thái hiện tại
 
-**HOÀN TẤT phần code + test cục bộ (không GPU), kể cả nhánh gate (tự học vùng cần sửa).**
-Chưa chạy thật trên Kaggle (cần GPU + dataset thật — xem "Bước tiếp theo"). Đang chờ
-người dùng cung cấp vị trí checkpoint Round 1 thật đã có sẵn (xem "Bước tiếp theo" mục 0).
+**HOÀN TẤT phần code + test cục bộ (không GPU), kể cả nhánh gate (tự học vùng cần sửa) và
+bản sửa theo review ngoài (resume/overwrite đúng nghĩa, val split riêng, verify commit/fix
+lúc clone).** Đã chạy thật 1 lần trên Kaggle (bản TRƯỚC fix gate, xem lịch sử) — đang chờ
+người dùng chạy lại với code mới nhất để có Score SAU thật + số liệu PSNR train-vs-test.
 
 ## Bối cảnh — vì sao có nhánh này
 
@@ -318,3 +319,39 @@ tự học phân biệt ĐÚNG — `gate_corner≈0.37-0.39` (vùng có lỗi) v
   xanh (không regression).
 - **CHƯA làm** (cần input từ người dùng): xác nhận vị trí checkpoint Round 1 thật để test
   bằng dữ liệu thật thay vì dataset giả cục bộ — xem "Bước tiếp theo" mục 0.
+
+### 2026-07-21 — Áp dụng review ngoài: resume đúng nghĩa + val split + verify version
+
+Người dùng chuyển 1 bản review (4 phát hiện) về `kaggle_model2_validation_hcm0031.ipynb`
+sau khi thấy notebook vẫn không "tinh chỉnh được". Đối chiếu từng điểm:
+
+1. **Đúng** — file notebook user gửi trước đó là bản CHẠY TRƯỚC fix gate (đã xác nhận ở
+   mục lịch sử "2026-07-21" trước), không phải bug mới.
+2. **Đúng, khớp 100%** phân tích gate-collapse đã ghi ở mục "Bug thật..." bên dưới.
+3. **Đúng, đã sửa** — Bước 8 (train Model 2) trước đây tự viết vòng lặp KHÔNG hỗ trợ
+   resume thật (chạy lại cell = train lại từ đầu với model mới, không load checkpoint
+   cũ) — khác hẳn `09_train_corrector.py` CLI thật (có `--resume`/`--overwrite`, kiểm
+   tra mismatch dataset, lưu optimizer state). Viết lại Bước 8: thêm biến `RESUME`/
+   `OVERWRITE` với ĐÚNG ngữ nghĩa (guard chặn nếu không cờ, cộng dồn step đúng khi
+   resume, kiểm tra `dataset_source_iteration` khớp) — gọi trực tiếp
+   `mod_cm.save_checkpoint`/`load_checkpoint` (không qua `main()` của 09, vẫn tránh được
+   vướng `get_scene("hcm0031")` như thiết kế ban đầu).
+4. **Đúng** — không có validation khách quan. Thêm `VAL_FRACTION` (mặc định 10%): tách 1
+   phần cặp (render, GT) mà Model 2 TỰ HỌC (không đụng gì tới việc Model 1 có/không giữ
+   holdout, đây là 2 khái niệm khác nhau) ra làm val riêng, in `val_l1` cạnh `loss`/
+   `gate_mean` mỗi 200 bước — tín hiệu tune đầu tiên, dù vẫn cùng "miền dễ" (pose train)
+   như nghi vấn kiến trúc đã nêu (mục trên) — KHÔNG thay thế được câu hỏi PSNR train-vs-
+   test, chỉ bổ sung.
+
+Thêm 2 việc khác từ góp ý: (a) in commit hash + **kiểm tra trực tiếp chuỗi
+`constant_(self.tail_gate.bias` có mặt trong `corrector_model.py` vừa clone hay không**
+ngay sau Bước 3 (bằng chứng cụ thể hơn nhiều so với chỉ tin GIT_BRANCH đúng tên — dừng
+cứng + báo lỗi rõ nếu KHÔNG thấy fix, tránh lặp lại tình huống "chạy code cũ mà không
+biết"); (b) thêm `stems: list[str] | None = None` vào `CorrectorPatchDataset.__init__()`
+(`09_train_corrector.py`, backward-compatible — mặc định `None` giữ NGUYÊN hành vi cũ) để
+hỗ trợ tách train/val, có thể tái dùng cho pipeline Round 2 thật sau này nếu cần.
+
+Verify: dry-run CPU thật (không mock) toàn bộ logic mới (resume cộng dồn đúng, overwrite
+reset đúng, chặn đúng khi không cờ, train/val tách biệt hoàn toàn + phủ hết stems) —
+sạch. Thêm 4 test mới (45 -> 49) cho `stems=...`. `test_syntax_all.py` 20/20 `.py` + 8/8
+`.ipynb`, `test_07_package_submission.py` 21/21 — không regression.

@@ -56,12 +56,23 @@ class CorrectorPatchDataset(Dataset):
     lật ngang/dọc nếu có) — lật KHÔNG làm hỏng tín hiệu học ở đây vì mạng không có giả
     định về hướng/ngữ nghĩa cảnh (thuần hàm sửa pixel cục bộ), giúp tăng đa dạng dữ liệu
     khi mỗi scene chỉ có vài trăm ảnh. `__len__` chỉ định nghĩa độ dài 1 "epoch" cho
-    DataLoader — thực chất lấy mẫu vô hạn (mỗi lần gọi là 1 crop ngẫu nhiên mới)."""
+    DataLoader — thực chất lấy mẫu vô hạn (mỗi lần gọi là 1 crop ngẫu nhiên mới).
 
-    def __init__(self, dataset_dir: Path, patch_size: int, patches_per_image: int = 50, seed: int = 42):
+    `stems`: mặc định `None` = dùng TOÀN BỘ ảnh trong `dataset_dir/render/` (hành vi cũ,
+    không đổi). Truyền 1 danh sách stem cụ thể để CHỈ dùng tập con đó — dùng để tách
+    train/val TRONG NỘI BỘ dữ liệu Model 2 tự học (vd giữ lại 10% cặp render/GT KHÔNG
+    đưa vào patch train, chỉ dùng để đo loss xem corrector có overfit đúng patch đã thấy
+    hay không) — KHÔNG liên quan gì tới việc Model 1 (3DGS) có/không giữ holdout, đây là
+    validation split RIÊNG của Model 2, thêm vào an toàn, không đổi hành vi mặc định."""
+
+    def __init__(self, dataset_dir: Path, patch_size: int, patches_per_image: int = 50, seed: int = 42,
+                 stems: list[str] | None = None):
         self.render_dir = dataset_dir / "render"
         self.gt_dir = dataset_dir / "gt"
-        self.stems = sorted(p.stem for p in self.render_dir.glob("*.png"))
+        if stems is not None:
+            self.stems = list(stems)
+        else:
+            self.stems = sorted(p.stem for p in self.render_dir.glob("*.png"))
         if not self.stems:
             raise SystemExit(
                 f"Không tìm thấy ảnh nào trong {self.render_dir} — chạy "

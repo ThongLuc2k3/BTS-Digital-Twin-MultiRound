@@ -334,6 +334,35 @@ def _make_fake_corrector_dataset(dataset_dir: Path, n_pairs: int = 3, size: int 
     (dataset_dir / "manifest.json").write_text(json.dumps(manifest))
 
 
+def test_dataset_stems_filter():
+    """CorrectorPatchDataset(..., stems=...) — thêm cho `kaggle_model2_validation_
+    hcm0031.ipynb` tách train/val riêng của Model 2 (xem review góp ý). Mặc định
+    stems=None PHẢI giữ nguyên hành vi cũ (dùng hết ảnh trong thư mục) — không phá vỡ
+    chỗ nào đang gọi không truyền stems (vd 09_train_corrector.py::main())."""
+    print("== 8. CorrectorPatchDataset(stems=...) ==")
+    mod = load_module(SCRIPT_09, "train_corrector_under_test_stems")
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _make_fake_corrector_dataset(td, n_pairs=6, size=32)
+
+        ds_default = mod.CorrectorPatchDataset(td, patch_size=16, seed=42)
+        check("stems=None (mặc định) dùng hết ảnh trong thư mục (hành vi cũ giữ nguyên)",
+              len(ds_default.stems) == 6, f"got {len(ds_default.stems)}")
+
+        subset = ["img_000", "img_002", "img_004"]
+        ds_subset = mod.CorrectorPatchDataset(td, patch_size=16, seed=42, stems=subset)
+        check("stems=<list> chỉ dùng đúng tập con truyền vào",
+              ds_subset.stems == subset, f"got {ds_subset.stems}")
+        check("__len__ tỉ lệ đúng theo số stems (patches_per_image không đổi)",
+              len(ds_subset) == len(subset) * 50)
+
+        try:
+            mod.CorrectorPatchDataset(td, patch_size=16, seed=42, stems=[])
+            check("stems=[] (rỗng) phải báo lỗi rõ, không âm thầm rỗng", False, "không raise")
+        except SystemExit:
+            check("stems=[] (rỗng) phải báo lỗi rõ, không âm thầm rỗng", True)
+
+
 def run_09(args, extra_env=None):
     env = os.environ.copy()
     if extra_env:
@@ -410,6 +439,7 @@ def main():
     test_tiled_reconstruction()
     test_train_resume_guard()
     test_08_gs_repo_guard()
+    test_dataset_stems_filter()
 
     print()
     print(f"===== {_n_pass} PASS, {len(_failures)} FAIL =====")
