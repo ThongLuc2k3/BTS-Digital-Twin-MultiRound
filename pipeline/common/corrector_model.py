@@ -87,11 +87,32 @@ class ResidualCorrectorNet(nn.Module):
         self.tail_residual = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
         self.tail_gate = nn.Conv2d(channels, 1, kernel_size=3, padding=1)
         # Khởi tạo 0 CÓ CHỦ ĐÍCH (xem docstring đầu file) — KHÔNG phải khởi tạo mặc định
-        # của PyTorch (Kaiming uniform khác 0), phải set tay sau khi tạo layer. Chỉ cần
-        # zero-init tail_residual để đảm bảo an toàn lúc khởi tạo (gate*0=0 bất kể gate
-        # bằng bao nhiêu) — tail_gate giữ khởi tạo mặc định của PyTorch, không cần ép 0.
+        # của PyTorch (Kaiming uniform khác 0), phải set tay sau khi tạo layer.
         nn.init.zeros_(self.tail_residual.weight)
         nn.init.zeros_(self.tail_residual.bias)
+
+        # BUG THẬT tìm được bằng train thật (không phải suy đoán) — gate bị "sập" về
+        # ~0.0000 chỉ sau ~1400 bước, dù --gate_sparsity_weight mặc định chỉ 0.01 (nhỏ).
+        # Nguyên nhân: lúc khởi tạo residual=0 (zero-init ở trên) MỌI NƠI, nên
+        # d(recon_loss)/d(gate) = d(recon_loss)/d(output) * residual = 0 — loss tái tạo
+        # KHÔNG cho gate bất kỳ gradient nào ở bước đầu, trong khi d(gate_sparsity_loss)/
+        # d(gate) = gate_sparsity_weight LUÔN LUÔN có gradient thật kéo gate xuống 0. Nếu
+        # gate khởi tạo ngẫu nhiên quanh sigmoid(0)=0.5 (mặc định Kaiming trên bias~0), nó
+        # bị kéo dần về 0 mà KHÔNG có lực đối trọng nào — và vì output = input + gate*
+        # residual, gate càng nhỏ thì d(recon_loss)/d(residual) = d(recon_loss)/d(output)*
+        # gate CŨNG càng nhỏ theo, khiến residual càng khó học được gì có ích -> vòng lặp
+        # tự củng cố, gate + residual cùng "chết" về 0 (corrector = no-op vĩnh viễn, mất
+        # hết tác dụng "tự học vùng cần sửa").
+        #
+        # Sửa: ép bias tail_gate dương đủ lớn (sigmoid(4.0)~=0.982) để gate KHỞI ĐẦU gần 1
+        # — output lúc khởi tạo VẪN = input y hệt (vì residual=0 bất kể gate bằng bao
+        # nhiêu, thuộc tính an toàn không đổi), nhưng giờ d(recon_loss)/d(residual) =
+        # d(recon_loss)/d(output)*gate ~= 0.98*(gradient thật) NGAY TỪ BƯỚC ĐẦU — residual
+        # có cơ hội học ra sửa lỗi có ích TRƯỚC khi phạt thưa có đủ đòn bẩy để bóp gate
+        # xuống ở những vùng KHÔNG cần sửa. Chỉ cần set bias (không set weight — muốn
+        # gate vẫn phụ thuộc feature cục bộ để phân biệt vùng, không phải hằng số tuyệt
+        # đối), khởi tạo mặc định Kaiming của weight vẫn giữ nguyên.
+        nn.init.constant_(self.tail_gate.bias, 4.0)
 
     def _features(self, x: torch.Tensor) -> torch.Tensor:
         feat = self.stem_act(self.stem(x))

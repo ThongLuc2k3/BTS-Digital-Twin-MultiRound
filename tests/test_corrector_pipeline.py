@@ -135,6 +135,64 @@ def test_network_architecture():
     check("tail_residual zero-init -> output == input bất kể gate là bao nhiêu (gate*0=0)",
           bool(torch.allclose(out2, x, atol=1e-6)))
 
+    fresh = mod.build_corrector(num_blocks=2, channels=4)
+    with torch.no_grad():
+        _o, gate0, _r = fresh.forward_with_gate(torch.rand(1, 3, 16, 16))
+    check("tail_gate.bias khởi tạo dương (gate ban đầu gần 1, KHÔNG phải ~0.5 mặc định) — "
+          "xem BUG THẬT đã sửa: gate sập về 0 nếu khởi tạo gần 0.5",
+          bool((gate0 > 0.9).all()), f"gate0 min={float(gate0.min()):.4f}")
+
+
+def test_gate_does_not_collapse():
+    """Regression test cho BUG THẬT tìm được bằng train thật (không phải suy đoán) trên
+    Kaggle: gate sập về đúng 0.0000 chỉ sau ~1400 bước dù --gate_sparsity_weight mặc định
+    chỉ 0.01 — nguyên nhân: residual=0 lúc khởi tạo (zero-init) nên loss tái tạo KHÔNG
+    cho gate gradient nào ở bước đầu, trong khi phạt thưa LUÔN có gradient kéo gate
+    xuống 0 — vòng lặp tự củng cố, gate+residual cùng "chết". Sửa bằng cách ép
+    tail_gate.bias dương (gate khởi tạo ~0.98) để residual có cơ hội học trước khi bị
+    phạt thưa bóp chết — xem docstring corrector_model.py.
+
+    Test này train THẬT (không mock) trên dữ liệu tổng hợp có cấu trúc học được (lỗi cục
+    bộ ở 1 góc ảnh, phần còn lại render=GT y hệt) — xác nhận: (1) gate_mean cuối cùng
+    KHÔNG sập về ~0 (còn "sống"), (2) gate tự học phân biệt ĐÚNG vùng lỗi (góc) cao hơn
+    hẳn vùng không lỗi (phần còn lại) — đúng mục tiêu thiết kế "tự suy luận vùng cần sửa"."""
+    print("== 2b. Regression: gate không sập về 0 (bug thật đã sửa) ==")
+    mod = load_module(CORRECTOR_MODEL_PATH, "corrector_model_under_test_gate_collapse")
+    torch.manual_seed(0)
+    model = mod.build_corrector(num_blocks=4, channels=16)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+
+    def make_batch(bs=4, size=64):
+        gt = torch.rand(bs, 3, size, size)
+        render = gt.clone()
+        render[:, :, :20, :20] += 0.3  # lỗi cục bộ CÓ CẤU TRÚC, chỉ ở góc trên-trái
+        return render.clamp(0, 1), gt
+
+    l1_fn = torch.nn.L1Loss()
+    gate_sparsity_weight = 0.01
+    model.train()
+    for _step in range(1, 801):
+        render, gt = make_batch()
+        output, gate, _residual = model.forward_with_gate(render)
+        loss = l1_fn(output, gt) + gate_sparsity_weight * gate.mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    model.eval()
+    with torch.no_grad():
+        render, gt = make_batch(bs=8)
+        _output, gate, _residual = model.forward_with_gate(render)
+    gate_mean = float(gate.mean())
+    gate_corner = float(gate[:, :, :20, :20].mean())
+    gate_rest = float(gate[:, :, 20:, 20:].mean())
+
+    check("gate KHÔNG sập về 0 sau 800 bước train thật (còn tín hiệu sống)",
+          gate_mean > 0.01, f"gate_mean={gate_mean:.5f} (bug cũ: sập về ~0.0000)")
+    check("gate tự học: vùng CÓ lỗi (góc) > vùng KHÔNG lỗi (còn lại), chênh lệch rõ",
+          gate_corner > gate_rest + 0.05,
+          f"gate_corner={gate_corner:.4f} gate_rest={gate_rest:.4f}")
+
 
 def test_checkpoint_roundtrip():
     print("== 3. Checkpoint save/load ==")
@@ -346,6 +404,7 @@ def main():
 
     test_syntax()
     test_network_architecture()
+    test_gate_does_not_collapse()
     test_checkpoint_roundtrip()
     test_ssim()
     test_tiled_reconstruction()

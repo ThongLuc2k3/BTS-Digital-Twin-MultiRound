@@ -111,6 +111,37 @@ kích thước bất kỳ (train patch cố định, suy luận ảnh test kích
 bỏ vì đi ngược mục tiêu giữ đúng giá trị màu tuyệt đối trong phục hồi ảnh, và dữ liệu
 mỗi scene quá ít (vài trăm ảnh) để ước lượng batch statistics ổn định.
 
+## Bug thật tìm được bằng train thật trên Kaggle (không phải suy đoán) — đã sửa
+
+**Gate sập về đúng 0.0000 chỉ sau ~1400 bước** (log thật:
+`[1400/4000] loss=0.02062 l1=0.02062 gate_mean=0.0000`), dù `--gate_sparsity_weight`
+mặc định chỉ 0.01 (nhỏ) — corrector trở thành no-op vĩnh viễn (không sửa gì cả), mất hết
+tác dụng "tự học vùng cần sửa" mà toàn bộ nhánh gate được thiết kế ra để làm.
+
+Nguyên nhân (đối chiếu công thức, verify lại bằng train thật cục bộ trên dữ liệu tổng
+hợp có cấu trúc): lúc khởi tạo `residual=0` MỌI NƠI (zero-init có chủ đích, xem trên) —
+`d(loss tái tạo)/d(gate) = d(loss)/d(output) * residual = 0` ở bước đầu, tức loss tái tạo
+KHÔNG cho gate gradient nào để "bênh vực" việc giữ gate cao. Trong khi đó
+`d(phạt thưa)/d(gate) = gate_sparsity_weight` LUÔN LUÔN có gradient thật kéo gate xuống
+0, không phụ thuộc gì vào residual. Nếu gate khởi tạo ngẫu nhiên quanh sigmoid(0)=0.5
+(mặc định Kaiming trên bias gần 0), nó bị kéo dần về 0 — và vì
+`d(loss)/d(residual) = d(loss)/d(output) * gate`, gate càng nhỏ thì residual CÀNG khó
+học được gì có ích, vòng lặp tự củng cố, cả gate lẫn residual cùng "chết".
+
+**Sửa:** ép `tail_gate.bias` khởi tạo dương (4.0, `sigmoid(4.0)≈0.982`) thay vì mặc định
+PyTorch — gate khởi đầu gần 1 thay vì gần 0.5. Thuộc tính an toàn "output=input lúc khởi
+tạo" GIỮ NGUYÊN (chỉ phụ thuộc `residual=0`, không phụ thuộc giá trị gate — `gate*0=0`
+bất kể gate bằng bao nhiêu). Nhưng giờ `d(loss)/d(residual) ≈ 0.98 * gradient thật` NGAY
+TỪ BƯỚC ĐẦU — residual có cơ hội học sửa lỗi có ích TRƯỚC khi phạt thưa đủ đòn bẩy bóp
+gate xuống ở vùng KHÔNG cần sửa.
+
+Verify lại bằng train thật (không mock) trên dữ liệu tổng hợp có lỗi cục bộ ở 1 góc ảnh
+(phần còn lại render=GT y hệt): sau 800 bước, `gate_mean≈0.04` (KHÔNG sập về 0), và gate
+tự học phân biệt ĐÚNG — `gate_corner≈0.37-0.39` (vùng có lỗi) vs `gate_rest≈0.0000-0.0016`
+(vùng không lỗi) — đúng hành vi thiết kế. Thêm 3 test hồi quy vào
+`tests/test_corrector_pipeline.py` (`test_gate_does_not_collapse` + check bias dương) —
+42 -> 45 test, tất cả PASS.
+
 ## Rủi ro — đọc trước khi dùng để nộp bài thật
 
 1. **Rủi ro tổng quát hoá (lớn nhất).** Model 2 chỉ thấy pose TRAIN lúc học, không có
