@@ -111,6 +111,31 @@ kích thước bất kỳ (train patch cố định, suy luận ảnh test kích
 bỏ vì đi ngược mục tiêu giữ đúng giá trị màu tuyệt đối trong phục hồi ảnh, và dữ liệu
 mỗi scene quá ít (vài trăm ảnh) để ước lượng batch statistics ổn định.
 
+## Nghi vấn kiến trúc SÂU HƠN bug gate — đang chờ số liệu thật để kết luận
+
+Sau khi sửa bug gate (mục dưới), người dùng hỏi thẳng: "hay logic và model 2 này sai à"
+— câu hỏi đúng chỗ, cần phân tích riêng khỏi bug gate (bug gate là lỗi CODE, còn đây là
+nghi vấn về THIẾT KẾ/dữ liệu, có thể đúng dù code không có bug nào khác):
+
+**Model 1 (3DGS) được train TRỰC TIẾP để tối thiểu hoá lỗi ĐÚNG TRÊN các pose TRAIN**
+(đó chính là mục tiêu tối ưu của `train.py`, không phải suy đoán) — nên PSNR/SSIM giữa
+render và GT tại pose TRAIN nhiều khả năng CAO HƠN NHIỀU so với PSNR/SSIM tại pose TEST
+thật (đã đo: PSNR=21.68 ở Bước 6, xem mục lịch sử "2026-07-20 — Notebook kiểm chứng").
+Nếu đúng vậy: cặp (render, GT) mà Model 2 học ở Bước 7 là bài toán "sửa lỗi RẤT NHỎ" —
+Model 2 có thể học ra correction quá YẾU để tạo khác biệt thật ở pose test, KHÔNG PHẢI
+vì cơ chế gate/residual sai, mà vì TÍN HIỆU HỌC không đại diện đúng cho vấn đề cần giải.
+Đây là rủi ro tổng quát hoá đã ghi trong mục "Rủi ro" bên dưới (mục 1), nhưng ở đây có cơ
+chế CỤ THỂ hơn: không chỉ "có thể không tổng quát hoá tốt", mà "tín hiệu train có thể
+QUÁ DỄ so với vấn đề thật cần giải".
+
+**Đã thêm đo lường trực tiếp** (Bước 7 của `kaggle_model2_validation_hcm0031.ipynb`):
+tính PSNR/SSIM giữa render và GT tại pose TRAIN NGAY sau khi render xong, in cạnh Score
+TEST (Bước 6) — nếu chênh > 3dB, in cảnh báo rõ + gợi ý hướng xử lý (giảm
+`--gate_sparsity_weight`, tăng STEPS, hoặc đánh đổi lại lựa chọn "train 100%, không giữ
+holdout" ban đầu để dành 1 phần ảnh train KHÔNG đưa vào Model 1 làm dữ liệu "giống test
+thật hơn" cho Model 2 học). **CHƯA có số liệu thật để kết luận** — cần chạy lại trên
+Kaggle với code mới nhất.
+
 ## Bug thật tìm được bằng train thật trên Kaggle (không phải suy đoán) — đã sửa
 
 **Gate sập về đúng 0.0000 chỉ sau ~1400 bước** (log thật:
